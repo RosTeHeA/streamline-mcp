@@ -607,6 +607,7 @@ class ToolExecutor {
       created_at: now,
       updated_at: now,
       is_deleted: false,
+      source: "00000000-0000-0000-0000-000000000000",  // Required for app visibility
     });
 
     // Handle tags
