@@ -212,18 +212,82 @@ function formatDate(date: Date | string | null): string {
 }
 
 // ============================================================================
+// Workspace Rules Types
+// ============================================================================
+
+interface RuleGroup {
+  id: string;
+  matchType: "Any of" | "All of";
+  tagNames: string[];
+}
+
+interface WorkspaceRules {
+  includeGroups: RuleGroup[];
+  excludeTags: string[];
+  groupCombinator: "AND" | "OR";
+  autoTagNames: string[];
+}
+
+/**
+ * Parse rules_data JSON from Supabase into WorkspaceRules
+ */
+function parseWorkspaceRules(rulesData: unknown): WorkspaceRules | null {
+  if (!rulesData) return null;
+
+  try {
+    const rules = rulesData as WorkspaceRules;
+
+    // Validate structure
+    if (!Array.isArray(rules.includeGroups)) return null;
+    if (!Array.isArray(rules.excludeTags)) return null;
+    if (!["AND", "OR"].includes(rules.groupCombinator)) return null;
+
+    return rules;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Generate human-readable summary of workspace rules
+ */
+function getRulesSummary(rules: WorkspaceRules): string {
+  const parts: string[] = [];
+
+  const nonEmptyGroups = rules.includeGroups.filter((g) => g.tagNames.length > 0);
+
+  if (nonEmptyGroups.length === 1) {
+    const group = nonEmptyGroups[0];
+    if (group.tagNames.length === 1) {
+      parts.push(`Include: ${group.tagNames[0]}`);
+    } else {
+      parts.push(`Include ${group.matchType.toLowerCase()}: ${group.tagNames.join(", ")}`);
+    }
+  } else if (nonEmptyGroups.length > 1) {
+    parts.push(`${nonEmptyGroups.length} rule groups (${rules.groupCombinator})`);
+  }
+
+  if (rules.excludeTags.length > 0) {
+    parts.push(`Exclude: ${rules.excludeTags.join(", ")}`);
+  }
+
+  return parts.length > 0 ? parts.join("; ") : "No rules (all items)";
+}
+
+// ============================================================================
 // Tool Definitions
 // ============================================================================
 
 const tools: Tool[] = [
   {
     name: "search_tasks",
-    description: "Search tasks by name, tags, due date, or status.",
+    description: "Search tasks by name, tags, due date, status, or workspace.",
     inputSchema: {
       type: "object",
       properties: {
         query: { type: "string", description: "Text to search in task names and notes" },
         tags: { type: "array", items: { type: "string" }, description: "Filter by tag names" },
+        workspace: { type: "string", description: "Filter by workspace name (case-insensitive)" },
         include_completed: { type: "boolean", description: "Include completed tasks (default: false)" },
         due_before: { type: "string", description: "Filter tasks due on or before (today, tomorrow, YYYY-MM-DD)" },
         due_after: { type: "string", description: "Filter tasks due on or after" },
@@ -298,12 +362,13 @@ const tools: Tool[] = [
   },
   {
     name: "search_notes",
-    description: "Search notes by title, content, or tags.",
+    description: "Search notes by title, content, tags, or workspace.",
     inputSchema: {
       type: "object",
       properties: {
         query: { type: "string", description: "Text to search" },
         tags: { type: "array", items: { type: "string" }, description: "Filter by tag names" },
+        workspace: { type: "string", description: "Filter by workspace name (case-insensitive)" },
         include_archived: { type: "boolean", description: "Include archived notes" },
         limit: { type: "integer", description: "Maximum results (default: 20)" },
       },
@@ -407,21 +472,23 @@ const tools: Tool[] = [
   },
   {
     name: "list_workspaces",
-    description: "List all workspaces.",
+    description: "List all workspaces with their filtering rules.",
     inputSchema: {
       type: "object",
-      properties: {},
+      properties: {
+        include_rules: { type: "boolean", description: "Include rule summaries (default: true)" },
+      },
     },
   },
   {
     name: "read_workspace",
-    description: "Get workspace details.",
+    description: "Get workspace details including filtering rules.",
     inputSchema: {
       type: "object",
       properties: {
         uuid: { type: "string", description: "Workspace UUID" },
+        name: { type: "string", description: "Workspace name (alternative to UUID, case-insensitive)" },
       },
-      required: ["uuid"],
     },
   },
 ];
@@ -471,7 +538,7 @@ class ToolExecutor {
         case "untag_item":
           return await this.untagItem(args);
         case "list_workspaces":
-          return await this.listWorkspaces();
+          return await this.listWorkspaces(args);
         case "read_workspace":
           return await this.readWorkspace(args);
         default:
@@ -511,7 +578,7 @@ class ToolExecutor {
     let tasks = await this.client.select<Record<string, unknown>>("tasks", {
       filters,
       order: "due_date.asc.nullslast",
-      limit: (args.limit as number) || 20,
+      limit: (args.limit as number) || 100, // Fetch more initially for workspace filtering
     });
 
     // Filter by query text
@@ -525,7 +592,19 @@ class ToolExecutor {
       });
     }
 
-    // Filter by tags
+    // Filter by workspace
+    const workspaceName = args.workspace as string;
+    if (workspaceName) {
+      const workspaceFilter = await this.getWorkspaceFilteredIDs(workspaceName, "task");
+      if (workspaceFilter === null) {
+        return JSON.stringify({ error: `Workspace '${workspaceName}' not found.` });
+      }
+      if (workspaceFilter !== "all") {
+        tasks = tasks.filter((t) => workspaceFilter.has(t.id as string));
+      }
+    }
+
+    // Filter by tags (applied after workspace filter)
     const tagNames = args.tags as string[];
     if (tagNames?.length) {
       const tagIDs = await this.getTagIDsByNames(tagNames);
@@ -536,6 +615,10 @@ class ToolExecutor {
         tasks = [];
       }
     }
+
+    // Apply final limit
+    const limit = (args.limit as number) || 20;
+    tasks = tasks.slice(0, limit);
 
     if (tasks.length === 0) {
       return "No tasks found matching your criteria.";
@@ -685,10 +768,10 @@ class ToolExecutor {
 
     if (args.permanent) {
       await this.client.delete("task_tags", [`task_id=eq.${uuid}`]);
-      await this.client.delete("tasks", [`id=eq.${uuid}`]);
+      await this.client.delete("tasks", [`id=eq.${uuid}`, `user_id=eq.${this.client.getUserID()}`]);
     } else {
       const now = new Date().toISOString();
-      await this.client.update("tasks", [`id=eq.${uuid}`], {
+      await this.client.update("tasks", [`id=eq.${uuid}`, `user_id=eq.${this.client.getUserID()}`], {
         trashed_date: now,
         is_deleted: true,
         updated_at: now,
@@ -718,8 +801,8 @@ class ToolExecutor {
 
     let notes = await this.client.select<Record<string, unknown>>("notes", {
       filters,
-      order: "updated_at.desc",
-      limit: (args.limit as number) || 20,
+      order: "last_edit_date.desc",
+      limit: (args.limit as number) || 100, // Fetch more initially for workspace filtering
     });
 
     // Filter by query text
@@ -733,7 +816,19 @@ class ToolExecutor {
       });
     }
 
-    // Filter by tags
+    // Filter by workspace
+    const workspaceName = args.workspace as string;
+    if (workspaceName) {
+      const workspaceFilter = await this.getWorkspaceFilteredIDs(workspaceName, "note");
+      if (workspaceFilter === null) {
+        return JSON.stringify({ error: `Workspace '${workspaceName}' not found.` });
+      }
+      if (workspaceFilter !== "all") {
+        notes = notes.filter((n) => workspaceFilter.has(n.id as string));
+      }
+    }
+
+    // Filter by tags (applied after workspace filter)
     const tagNames = args.tags as string[];
     if (tagNames?.length) {
       const tagIDs = await this.getTagIDsByNames(tagNames);
@@ -744,6 +839,10 @@ class ToolExecutor {
         notes = [];
       }
     }
+
+    // Apply final limit
+    const limit = (args.limit as number) || 20;
+    notes = notes.slice(0, limit);
 
     if (notes.length === 0) {
       return "No notes found matching your criteria.";
@@ -982,6 +1081,15 @@ class ToolExecutor {
       });
       if (notes.length === 0) return `Note not found with UUID: ${uuid}`;
 
+      // Check if tag is already assigned
+      const existingNoteTag = await this.client.select<Record<string, unknown>>("note_tags", {
+        filters: [`note_id=eq.${uuid}`, `tag_id=eq.${tagID}`],
+        limit: 1,
+      });
+      if (existingNoteTag.length > 0) {
+        return JSON.stringify({ success: true, message: `Tag '${tagName}' already assigned to note` });
+      }
+
       await this.client.insert("note_tags", { note_id: uuid, tag_id: tagID });
     } else {
       const tasks = await this.client.select<Record<string, unknown>>("tasks", {
@@ -989,6 +1097,15 @@ class ToolExecutor {
         limit: 1,
       });
       if (tasks.length === 0) return `Task not found with UUID: ${uuid}`;
+
+      // Check if tag is already assigned
+      const existingTaskTag = await this.client.select<Record<string, unknown>>("task_tags", {
+        filters: [`task_id=eq.${uuid}`, `tag_id=eq.${tagID}`],
+        limit: 1,
+      });
+      if (existingTaskTag.length > 0) {
+        return JSON.stringify({ success: true, message: `Tag '${tagName}' already assigned to task` });
+      }
 
       await this.client.insert("task_tags", { task_id: uuid, tag_id: tagID });
     }
@@ -1027,41 +1144,82 @@ class ToolExecutor {
   // Workspace Tools
   // --------------------------------------------------------------------------
 
-  private async listWorkspaces(): Promise<string> {
+  private async listWorkspaces(args: Record<string, unknown> = {}): Promise<string> {
     const workspaces = await this.client.select<Record<string, unknown>>("workspaces", {
-      filters: [`user_id=eq.${this.client.getUserID()}`],
+      filters: [`user_id=eq.${this.client.getUserID()}`, "is_deleted=eq.false"],
       order: "sort_index.asc",
       limit: 100,
     });
 
-    const results = workspaces.map((w) => ({
-      uuid: w.id,
-      name: w.name,
-      color: w.color_name,
-    }));
+    const includeRules = args.include_rules !== false; // Default to true
+
+    const results = workspaces.map((w) => {
+      const result: Record<string, unknown> = {
+        uuid: w.id,
+        name: w.name,
+        color: w.color_name,
+      };
+
+      if (includeRules) {
+        const rules = parseWorkspaceRules(w.rules_data);
+        result.rules_summary = rules ? getRulesSummary(rules) : "No rules (all items)";
+      }
+
+      return result;
+    });
 
     return JSON.stringify({ count: results.length, workspaces: results }, null, 2);
   }
 
   private async readWorkspace(args: Record<string, unknown>): Promise<string> {
-    const uuid = args.uuid as string;
-    if (!uuid) return JSON.stringify({ error: "UUID required" });
+    let workspace: Record<string, unknown> | null = null;
 
-    const workspaces = await this.client.select<Record<string, unknown>>("workspaces", {
-      filters: [`id=eq.${uuid}`, `user_id=eq.${this.client.getUserID()}`],
-      limit: 1,
-    });
+    // Support lookup by UUID or name
+    if (args.uuid) {
+      const uuid = args.uuid as string;
+      const workspaces = await this.client.select<Record<string, unknown>>("workspaces", {
+        filters: [`id=eq.${uuid}`, `user_id=eq.${this.client.getUserID()}`],
+        limit: 1,
+      });
+      workspace = workspaces[0] || null;
+    } else if (args.name) {
+      const name = args.name as string;
+      const workspaces = await this.client.select<Record<string, unknown>>("workspaces", {
+        filters: [`user_id=eq.${this.client.getUserID()}`, `name=ilike.${name}`],
+        limit: 1,
+      });
+      workspace = workspaces[0] || null;
+    } else {
+      return JSON.stringify({ error: "UUID or name required" });
+    }
 
-    if (workspaces.length === 0) return `Workspace not found with UUID: ${uuid}`;
+    if (!workspace) {
+      return args.uuid
+        ? `Workspace not found with UUID: ${args.uuid}`
+        : `Workspace not found with name: ${args.name}`;
+    }
 
-    const w = workspaces[0];
+    const rules = parseWorkspaceRules(workspace.rules_data);
+
     return JSON.stringify(
       {
-        uuid: w.id,
-        name: w.name,
-        color: w.color_name,
-        created: w.created_date ? formatDate(w.created_date as string) : undefined,
-        updated: w.updated_date ? formatDate(w.updated_date as string) : undefined,
+        uuid: workspace.id,
+        name: workspace.name,
+        color: workspace.color_name,
+        rules: rules
+          ? {
+              include_groups: rules.includeGroups.map((g) => ({
+                match_type: g.matchType,
+                tags: g.tagNames,
+              })),
+              exclude_tags: rules.excludeTags,
+              group_combinator: rules.groupCombinator,
+              auto_tags: rules.autoTagNames,
+              summary: getRulesSummary(rules),
+            }
+          : null,
+        created: workspace.created_at ? formatDate(workspace.created_at as string) : undefined,
+        updated: workspace.updated_at ? formatDate(workspace.updated_at as string) : undefined,
       },
       null,
       2
@@ -1171,6 +1329,243 @@ class ToolExecutor {
       if (tags.length > 0) names.push(tags[0].name as string);
     }
     return names;
+  }
+
+  // --------------------------------------------------------------------------
+  // Workspace Filtering Helpers
+  // --------------------------------------------------------------------------
+
+  /**
+   * Get IDs of items (tasks or notes) that match a workspace's rules.
+   * Returns:
+   * - null if workspace not found
+   * - "all" if workspace has no filtering rules (all items match)
+   * - Set<string> of matching item IDs
+   */
+  private async getWorkspaceFilteredIDs(
+    workspaceName: string,
+    itemType: "task" | "note"
+  ): Promise<Set<string> | "all" | null> {
+    // Find workspace by name
+    const workspaces = await this.client.select<Record<string, unknown>>("workspaces", {
+      filters: [`user_id=eq.${this.client.getUserID()}`, `name=ilike.${workspaceName}`],
+      limit: 1,
+    });
+
+    if (workspaces.length === 0) {
+      return null; // Workspace not found
+    }
+
+    const workspace = workspaces[0];
+    const rules = parseWorkspaceRules(workspace.rules_data);
+
+    // No rules or empty rules = all items match
+    if (!rules) {
+      return "all";
+    }
+
+    const nonEmptyGroups = rules.includeGroups.filter((g) => g.tagNames.length > 0);
+    if (nonEmptyGroups.length === 0 && rules.excludeTags.length === 0) {
+      return "all";
+    }
+
+    // Build tag name -> ID cache
+    const allTagNames = [
+      ...new Set([
+        ...nonEmptyGroups.flatMap((g) => g.tagNames),
+        ...rules.excludeTags,
+      ]),
+    ];
+
+    const tagCache = new Map<string, string>();
+    for (const name of allTagNames) {
+      const tags = await this.client.select<Record<string, unknown>>("tags", {
+        filters: [`user_id=eq.${this.client.getUserID()}`, `name=ilike.${name}`],
+        limit: 1,
+      });
+      if (tags.length > 0) {
+        tagCache.set(name.toLowerCase(), tags[0].id as string);
+      }
+    }
+
+    const junctionTable = itemType === "task" ? "task_tags" : "note_tags";
+    const idField = itemType === "task" ? "task_id" : "note_id";
+
+    // Process include groups
+    let matchingIDs: Set<string> | null = null;
+
+    if (nonEmptyGroups.length > 0) {
+      const groupResults: Set<string>[] = [];
+
+      for (const group of nonEmptyGroups) {
+        const tagIDs = group.tagNames
+          .map((name) => tagCache.get(name.toLowerCase()))
+          .filter(Boolean) as string[];
+
+        if (tagIDs.length === 0) {
+          // Group references tags that don't exist - no matches for this group
+          groupResults.push(new Set());
+          continue;
+        }
+
+        const groupItemIDs = await this.getItemsMatchingTags(
+          junctionTable,
+          idField,
+          tagIDs,
+          group.matchType
+        );
+        groupResults.push(groupItemIDs);
+      }
+
+      // Combine groups based on combinator
+      if (groupResults.length > 0) {
+        if (rules.groupCombinator === "OR") {
+          matchingIDs = this.unionSets(groupResults);
+        } else {
+          matchingIDs = this.intersectSets(groupResults);
+        }
+      }
+    }
+
+    // If no include rules, start with all items that have any tags
+    // (we'll filter by excludes only)
+    if (matchingIDs === null && rules.excludeTags.length > 0) {
+      // Get all items
+      const allItems = await this.client.select<Record<string, unknown>>(
+        itemType === "task" ? "tasks" : "notes",
+        {
+          filters: [`user_id=eq.${this.client.getUserID()}`, "is_deleted=eq.false"],
+          limit: 10000,
+        }
+      );
+      matchingIDs = new Set(allItems.map((item) => item.id as string));
+    }
+
+    // Apply exclusions
+    if (rules.excludeTags.length > 0 && matchingIDs !== null) {
+      const excludeTagIDs = rules.excludeTags
+        .map((name) => tagCache.get(name.toLowerCase()))
+        .filter(Boolean) as string[];
+
+      if (excludeTagIDs.length > 0) {
+        const excludedItems = await this.getItemsWithAnyTag(junctionTable, idField, excludeTagIDs);
+
+        // Remove excluded items
+        for (const id of excludedItems) {
+          matchingIDs.delete(id);
+        }
+      }
+    }
+
+    return matchingIDs || new Set();
+  }
+
+  /**
+   * Get items that match tags based on matchType (ANY of / ALL of)
+   */
+  private async getItemsMatchingTags(
+    table: string,
+    idField: string,
+    tagIDs: string[],
+    matchType: "Any of" | "All of"
+  ): Promise<Set<string>> {
+    const itemIDs = new Set<string>();
+
+    if (matchType === "Any of") {
+      // OR logic: item has any of the tags
+      for (const tagID of tagIDs) {
+        const junctions = await this.client.select<Record<string, unknown>>(table, {
+          filters: [`tag_id=eq.${tagID}`],
+          limit: 10000,
+        });
+        for (const j of junctions) {
+          itemIDs.add(j[idField] as string);
+        }
+      }
+    } else {
+      // AND logic: item has all tags
+      if (tagIDs.length === 0) return itemIDs;
+
+      // Get items for first tag
+      const firstTagJunctions = await this.client.select<Record<string, unknown>>(table, {
+        filters: [`tag_id=eq.${tagIDs[0]}`],
+        limit: 10000,
+      });
+
+      const candidates = new Set(firstTagJunctions.map((j) => j[idField] as string));
+
+      // Check remaining tags - item must have all
+      for (let i = 1; i < tagIDs.length; i++) {
+        const junctions = await this.client.select<Record<string, unknown>>(table, {
+          filters: [`tag_id=eq.${tagIDs[i]}`],
+          limit: 10000,
+        });
+        const hasTag = new Set(junctions.map((j) => j[idField] as string));
+
+        // Keep only items that have this tag too
+        for (const id of candidates) {
+          if (!hasTag.has(id)) {
+            candidates.delete(id);
+          }
+        }
+      }
+
+      return candidates;
+    }
+
+    return itemIDs;
+  }
+
+  /**
+   * Get items that have any of the specified tags
+   */
+  private async getItemsWithAnyTag(
+    table: string,
+    idField: string,
+    tagIDs: string[]
+  ): Promise<Set<string>> {
+    const itemIDs = new Set<string>();
+    for (const tagID of tagIDs) {
+      const junctions = await this.client.select<Record<string, unknown>>(table, {
+        filters: [`tag_id=eq.${tagID}`],
+        limit: 10000,
+      });
+      for (const j of junctions) {
+        itemIDs.add(j[idField] as string);
+      }
+    }
+    return itemIDs;
+  }
+
+  /**
+   * Union multiple sets
+   */
+  private unionSets(sets: Set<string>[]): Set<string> {
+    const result = new Set<string>();
+    for (const set of sets) {
+      for (const item of set) {
+        result.add(item);
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Intersect multiple sets
+   */
+  private intersectSets(sets: Set<string>[]): Set<string> {
+    if (sets.length === 0) return new Set();
+    if (sets.length === 1) return sets[0];
+
+    const result = new Set(sets[0]);
+    for (let i = 1; i < sets.length; i++) {
+      for (const item of result) {
+        if (!sets[i].has(item)) {
+          result.delete(item);
+        }
+      }
+    }
+    return result;
   }
 }
 
