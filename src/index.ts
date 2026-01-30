@@ -717,7 +717,7 @@ class ToolExecutor {
 
     let notes = await this.client.select<Record<string, unknown>>("notes", {
       filters,
-      order: "last_edit_date.desc",
+      order: "updated_at.desc",
       limit: (args.limit as number) || 20,
     });
 
