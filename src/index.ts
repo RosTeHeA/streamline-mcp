@@ -801,7 +801,7 @@ class ToolExecutor {
 
     let notes = await this.client.select<Record<string, unknown>>("notes", {
       filters,
-      order: "last_edit_date.desc",
+      order: "updated_at.desc",
       limit: (args.limit as number) || 100, // Fetch more initially for workspace filtering
     });
 
@@ -852,7 +852,7 @@ class ToolExecutor {
       uuid: n.id,
       title: n.first_line_clean || "Untitled",
       preview: n.second_line_clean ? (n.second_line_clean as string).slice(0, 150) : undefined,
-      last_edited: n.last_edit_date ? formatDate(n.last_edit_date as string) : undefined,
+      last_edited: n.updated_at ? formatDate(n.updated_at as string) : undefined,
       word_count: n.word_count,
       is_flagged: n.is_flagged,
     }));
@@ -885,8 +885,8 @@ class ToolExecutor {
         uuid: n.id,
         title: n.first_line_clean || "Untitled",
         content,
-        last_edited: n.last_edit_date ? formatDate(n.last_edit_date as string) : undefined,
-        created: n.creation_date ? formatDate(n.creation_date as string) : undefined,
+        last_edited: n.updated_at ? formatDate(n.updated_at as string) : undefined,
+        created: n.created_at ? formatDate(n.created_at as string) : undefined,
         word_count: n.word_count,
         is_flagged: n.is_flagged,
         is_archived: n.in_archive,
@@ -913,8 +913,8 @@ class ToolExecutor {
       content,
       first_line_clean: firstLine,
       second_line_clean: secondLine,
-      creation_date: now,
-      last_edit_date: now,
+      created_at: now,
+      updated_at: now,
       is_flagged: false,
       in_archive: false,
       word_count: wordCount,
@@ -949,7 +949,7 @@ class ToolExecutor {
 
     if (notes.length === 0) return `Note not found with UUID: ${uuid}`;
 
-    const updates: Record<string, unknown> = { last_edit_date: new Date().toISOString() };
+    const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
 
     if (args.content !== undefined) {
       const content = args.content as string;
@@ -996,7 +996,7 @@ class ToolExecutor {
       await this.client.update("notes", [`id=eq.${uuid}`], {
         trashed_date: now,
         is_deleted: true,
-        last_edit_date: now,
+        updated_at: now,
       });
     }
 
