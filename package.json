@@ -1,0 +1,34 @@
+{
+  "name": "streamline-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for Streamline - access your tasks, notes, tags, and workspaces",
+  "main": "dist/index.js",
+  "bin": {
+    "streamline-mcp": "dist/index.js"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch"
+  },
+  "keywords": [
+    "mcp",
+    "streamline",
+    "tasks",
+    "notes",
+    "ai"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
