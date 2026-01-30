@@ -10,7 +10,7 @@ Create `~/.config/streamline-mcp/config.json`:
 
 ```json
 {
-  "projectURL": "https://jrgsnuobnulpadoivgyj.supabase.co",
+  "projectURL": "https://YOUR_PROJECT_ID.supabase.co",
   "apiKey": "YOUR_SERVICE_ROLE_KEY",
   "userID": "YOUR_USER_UUID"
 }
@@ -112,7 +112,7 @@ update_note(uuid: "...", append: "\n\n## Follow-up\nNew content here")
 You can use environment variables instead of a config file:
 
 ```bash
-SUPABASE_URL=https://jrgsnuobnulpadoivgyj.supabase.co
+SUPABASE_URL=https://YOUR_PROJECT_ID.supabase.co
 SUPABASE_API_KEY=your_service_role_key
 SUPABASE_USER_ID=your_user_uuid
 ```
