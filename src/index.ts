@@ -1096,6 +1096,8 @@ class ToolExecutor {
       }
 
       await this.client.insert("note_tags", { note_id: uuid, tag_id: tagID });
+      // Touch note's updated_at to trigger realtime sync
+      await this.client.update("notes", [`id=eq.${uuid}`], { updated_at: new Date().toISOString() });
     } else {
       const tasks = await this.client.select<Record<string, unknown>>("tasks", {
         filters: [`id=eq.${uuid}`, `user_id=eq.${this.client.getUserID()}`],
@@ -1113,6 +1115,8 @@ class ToolExecutor {
       }
 
       await this.client.insert("task_tags", { task_id: uuid, tag_id: tagID });
+      // Touch task's updated_at to trigger realtime sync
+      await this.client.update("tasks", [`id=eq.${uuid}`], { updated_at: new Date().toISOString() });
     }
 
     return JSON.stringify({ success: true, message: `Added tag '${tagName}' to ${itemType}` });
@@ -1138,8 +1142,12 @@ class ToolExecutor {
 
     if (itemType === "note") {
       await this.client.delete("note_tags", [`note_id=eq.${uuid}`, `tag_id=eq.${tagID}`]);
+      // Touch note's updated_at to trigger realtime sync
+      await this.client.update("notes", [`id=eq.${uuid}`], { updated_at: new Date().toISOString() });
     } else {
       await this.client.delete("task_tags", [`task_id=eq.${uuid}`, `tag_id=eq.${tagID}`]);
+      // Touch task's updated_at to trigger realtime sync
+      await this.client.update("tasks", [`id=eq.${uuid}`], { updated_at: new Date().toISOString() });
     }
 
     return JSON.stringify({ success: true, message: `Removed tag '${tagName}' from ${itemType}` });
