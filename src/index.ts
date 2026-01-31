@@ -575,10 +575,15 @@ class ToolExecutor {
       filters.push(`due_date=gte.${dueAfter.toISOString()}`);
     }
 
+    // When filtering by tags or workspace, fetch more initially since we filter in memory
+    const hasTagFilter = !!(args.tags as string[])?.length;
+    const hasWorkspaceFilter = !!(args.workspace as string);
+    const initialLimit = (hasTagFilter || hasWorkspaceFilter) ? 1000 : ((args.limit as number) || 100);
+    
     let tasks = await this.client.select<Record<string, unknown>>("tasks", {
       filters,
       order: "due_date.asc.nullslast",
-      limit: (args.limit as number) || 100, // Fetch more initially for workspace filtering
+      limit: initialLimit,
     });
 
     // Filter by query text
@@ -1233,10 +1238,17 @@ class ToolExecutor {
   private async getTagIDsByNames(names: string[]): Promise<string[]> {
     const ids: string[] = [];
     for (const name of names) {
-      const tags = await this.client.select<Record<string, unknown>>("tags", {
-        filters: [`user_id=eq.${this.client.getUserID()}`, `name=ilike.${name}`],
+      // Try exact match first, then case-insensitive
+      let tags = await this.client.select<Record<string, unknown>>("tags", {
+        filters: [`user_id=eq.${this.client.getUserID()}`, `name=eq.${name}`],
         limit: 1,
       });
+      if (tags.length === 0) {
+        tags = await this.client.select<Record<string, unknown>>("tags", {
+          filters: [`user_id=eq.${this.client.getUserID()}`, `name=ilike.${name}`],
+          limit: 1,
+        });
+      }
       if (tags.length > 0) ids.push(tags[0].id as string);
     }
     return ids;
@@ -1270,31 +1282,67 @@ class ToolExecutor {
   }
 
   private async getTaskIDsWithTags(tagIDs: string[]): Promise<Set<string>> {
-    const taskIDs = new Set<string>();
+    // Use intersection (AND logic) - task must have ALL specified tags
+    let resultSet: Set<string> | null = null;
+    
     for (const tagID of tagIDs) {
       const junctions = await this.client.select<Record<string, unknown>>("task_tags", {
         filters: [`tag_id=eq.${tagID}`],
         limit: 1000,
       });
+      
+      const taskIDsForTag = new Set<string>();
       for (const j of junctions) {
-        taskIDs.add(j.task_id as string);
+        taskIDsForTag.add(j.task_id as string);
+      }
+      
+      if (resultSet === null) {
+        // First tag - initialize with all its tasks
+        resultSet = taskIDsForTag;
+      } else {
+        // Subsequent tags - intersect (keep only tasks that have this tag too)
+        const intersection = new Set<string>();
+        for (const id of resultSet) {
+          if (taskIDsForTag.has(id)) {
+            intersection.add(id);
+          }
+        }
+        resultSet = intersection;
       }
     }
-    return taskIDs;
+    
+    return resultSet ?? new Set<string>();
   }
 
   private async getNoteIDsWithTags(tagIDs: string[]): Promise<Set<string>> {
-    const noteIDs = new Set<string>();
+    // Use intersection (AND logic) - note must have ALL specified tags
+    let resultSet: Set<string> | null = null;
+    
     for (const tagID of tagIDs) {
       const junctions = await this.client.select<Record<string, unknown>>("note_tags", {
         filters: [`tag_id=eq.${tagID}`],
         limit: 1000,
       });
+      
+      const noteIDsForTag = new Set<string>();
       for (const j of junctions) {
-        noteIDs.add(j.note_id as string);
+        noteIDsForTag.add(j.note_id as string);
+      }
+      
+      if (resultSet === null) {
+        resultSet = noteIDsForTag;
+      } else {
+        const intersection = new Set<string>();
+        for (const id of resultSet) {
+          if (noteIDsForTag.has(id)) {
+            intersection.add(id);
+          }
+        }
+        resultSet = intersection;
       }
     }
-    return noteIDs;
+    
+    return resultSet ?? new Set<string>();
   }
 
   private async getTagNamesForTask(taskID: string): Promise<string[]> {
