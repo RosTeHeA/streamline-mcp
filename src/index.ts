@@ -289,6 +289,7 @@ const tools: Tool[] = [
         tags: { type: "array", items: { type: "string" }, description: "Filter by tag names" },
         workspace: { type: "string", description: "Filter by workspace name (case-insensitive)" },
         include_completed: { type: "boolean", description: "Include completed tasks (default: false)" },
+        include_tags: { type: "boolean", description: "Include tags for each task in results (default: false)" },
         due_before: { type: "string", description: "Filter tasks due on or before (today, tomorrow, YYYY-MM-DD)" },
         due_after: { type: "string", description: "Filter tasks due on or after" },
         limit: { type: "integer", description: "Maximum results (default: 20)" },
@@ -629,14 +630,29 @@ class ToolExecutor {
       return "No tasks found matching your criteria.";
     }
 
-    const results = tasks.map((t) => ({
-      uuid: t.id,
-      name: t.name,
-      completed: t.status,
-      due_date: t.due_date ? formatDate(t.due_date as string) : undefined,
-      notes: t.note ? (t.note as string).slice(0, 100) : undefined,
-      is_urgent: t.is_urgent_alarm || undefined,
-    }));
+    const includeTags = args.include_tags === true;
+
+    const results = await Promise.all(
+      tasks.map(async (t) => {
+        const result: Record<string, unknown> = {
+          uuid: t.id,
+          name: t.name,
+          completed: t.status,
+          due_date: t.due_date ? formatDate(t.due_date as string) : undefined,
+          notes: t.note ? (t.note as string).slice(0, 100) : undefined,
+          is_urgent: t.is_urgent_alarm || undefined,
+        };
+
+        if (includeTags) {
+          const tagNames = await this.getTagNamesForTask(t.id as string);
+          if (tagNames.length > 0) {
+            result.tags = tagNames;
+          }
+        }
+
+        return result;
+      })
+    );
 
     return JSON.stringify({ count: results.length, tasks: results }, null, 2);
   }
