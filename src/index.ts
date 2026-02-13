@@ -212,6 +212,335 @@ function formatDate(date: Date | string | null): string {
 }
 
 // ============================================================================
+// Recurrence Types and Engine (ported from Swift)
+// ============================================================================
+
+type RecurrenceFrequency = "daily" | "weekly" | "monthly" | "yearly";
+type RecurrenceAnchor = "scheduledDueDate" | "completionDate";
+type MonthlyMode = "dayOfMonth" | "ordinalWeekday";
+type RecurrenceStatus = "active" | "paused" | "ended";
+
+interface RecurrenceEndCondition {
+  type: "never" | "afterOccurrences" | "onDate";
+  count?: number;
+  date?: string;
+}
+
+interface RecurrenceRule {
+  frequency: RecurrenceFrequency;
+  interval: number;
+  weekdays?: number[]; // 1 = Sunday, 7 = Saturday
+  monthlyMode?: MonthlyMode;
+  dayOfMonth?: number;
+  ordinalWeek?: number;
+  ordinalWeekday?: number;
+  monthOfYear?: number;
+  anchor: RecurrenceAnchor;
+  endCondition: RecurrenceEndCondition;
+  occurrencesGenerated: number;
+}
+
+/**
+ * Recurrence Engine - calculates next occurrence dates
+ * Ported from TaskRecurrenceEngine.swift
+ */
+class RecurrenceEngine {
+  /**
+   * Compute the next occurrence date for a recurrence rule
+   */
+  nextOccurrenceDate(
+    rule: RecurrenceRule,
+    anchorDate: Date,
+    referenceDate: Date = new Date()
+  ): Date | null {
+    // Check if series has ended
+    if (this.hasEnded(rule, referenceDate)) {
+      return null;
+    }
+
+    let candidateDate: Date;
+
+    switch (rule.frequency) {
+      case "daily":
+        candidateDate = this.nextDailyOccurrence(anchorDate, rule.interval);
+        break;
+      case "weekly":
+        candidateDate = this.nextWeeklyOccurrence(anchorDate, rule.interval, rule.weekdays || []);
+        break;
+      case "monthly":
+        candidateDate = this.nextMonthlyOccurrence(
+          anchorDate,
+          rule.interval,
+          rule.monthlyMode || "dayOfMonth",
+          rule.dayOfMonth,
+          rule.ordinalWeek,
+          rule.ordinalWeekday
+        );
+        break;
+      case "yearly":
+        candidateDate = this.nextYearlyOccurrence(
+          anchorDate,
+          rule.interval,
+          rule.monthOfYear,
+          rule.dayOfMonth
+        );
+        break;
+      default:
+        candidateDate = this.nextDailyOccurrence(anchorDate, rule.interval);
+    }
+
+    // For scheduled-anchor rules, if candidate is in the past, find next valid date
+    if (rule.anchor === "scheduledDueDate" && candidateDate < referenceDate) {
+      candidateDate = this.findNextValidDate(rule, referenceDate);
+    }
+
+    // Check against end date
+    if (rule.endCondition.type === "onDate" && rule.endCondition.date) {
+      const endDate = new Date(rule.endCondition.date);
+      if (candidateDate > endDate) {
+        return null;
+      }
+    }
+
+    return candidateDate;
+  }
+
+  private hasEnded(rule: RecurrenceRule, referenceDate: Date): boolean {
+    switch (rule.endCondition.type) {
+      case "never":
+        return false;
+      case "afterOccurrences":
+        return rule.occurrencesGenerated >= (rule.endCondition.count || 0);
+      case "onDate":
+        if (rule.endCondition.date) {
+          return referenceDate > new Date(rule.endCondition.date);
+        }
+        return false;
+      default:
+        return false;
+    }
+  }
+
+  private nextDailyOccurrence(date: Date, interval: number): Date {
+    const result = new Date(date);
+    result.setDate(result.getDate() + interval);
+    return result;
+  }
+
+  private nextWeeklyOccurrence(date: Date, interval: number, weekdays: number[]): Date {
+    // If no weekdays specified, just add weeks
+    if (weekdays.length === 0) {
+      const result = new Date(date);
+      result.setDate(result.getDate() + interval * 7);
+      return result;
+    }
+
+    const currentWeekday = date.getDay() + 1; // JS is 0-based, we use 1-based
+    const sortedWeekdays = [...weekdays].sort((a, b) => a - b);
+
+    // Try to find a weekday later in the current week (for interval = 1)
+    if (interval === 1) {
+      for (const weekday of sortedWeekdays) {
+        if (weekday > currentWeekday) {
+          const daysToAdd = weekday - currentWeekday;
+          const result = new Date(date);
+          result.setDate(result.getDate() + daysToAdd);
+          return result;
+        }
+      }
+    }
+
+    // Jump to the next week (or N weeks) and find the first matching weekday
+    const result = new Date(date);
+    result.setDate(result.getDate() + interval * 7);
+
+    const targetWeekday = sortedWeekdays[0];
+    const nextWeekCurrentDay = result.getDay() + 1;
+    const daysDifference = targetWeekday - nextWeekCurrentDay;
+
+    result.setDate(result.getDate() + daysDifference);
+    return result;
+  }
+
+  private nextMonthlyOccurrence(
+    date: Date,
+    interval: number,
+    mode: MonthlyMode,
+    dayOfMonth?: number,
+    ordinalWeek?: number,
+    ordinalWeekday?: number
+  ): Date {
+    if (mode === "dayOfMonth") {
+      return this.nextMonthlyByDay(date, interval, dayOfMonth || 1);
+    } else {
+      return this.nextMonthlyByOrdinalWeekday(
+        date,
+        interval,
+        ordinalWeek || 1,
+        ordinalWeekday || 2 // Default to Monday
+      );
+    }
+  }
+
+  private nextMonthlyByDay(date: Date, interval: number, day: number): Date {
+    const result = new Date(date);
+    result.setMonth(result.getMonth() + interval);
+
+    // Clamp day to valid range for the month
+    const daysInMonth = new Date(result.getFullYear(), result.getMonth() + 1, 0).getDate();
+    result.setDate(Math.min(day, daysInMonth));
+
+    return result;
+  }
+
+  private nextMonthlyByOrdinalWeekday(
+    date: Date,
+    interval: number,
+    ordinal: number,
+    weekday: number
+  ): Date {
+    const result = new Date(date);
+    result.setMonth(result.getMonth() + interval);
+    result.setDate(1);
+
+    if (ordinal === -1) {
+      // Last occurrence of weekday in month
+      const lastDay = new Date(result.getFullYear(), result.getMonth() + 1, 0);
+      let current = lastDay;
+      while (current.getDay() + 1 !== weekday) {
+        current.setDate(current.getDate() - 1);
+      }
+      return current;
+    }
+
+    // Find the nth occurrence
+    let count = 0;
+    while (count < ordinal) {
+      if (result.getDay() + 1 === weekday) {
+        count++;
+        if (count === ordinal) break;
+      }
+      result.setDate(result.getDate() + 1);
+    }
+
+    return result;
+  }
+
+  private nextYearlyOccurrence(
+    date: Date,
+    interval: number,
+    month?: number,
+    day?: number
+  ): Date {
+    const result = new Date(date);
+    result.setFullYear(result.getFullYear() + interval);
+
+    if (month !== undefined) {
+      result.setMonth(month - 1); // JS months are 0-based
+    }
+
+    if (day !== undefined) {
+      const daysInMonth = new Date(result.getFullYear(), result.getMonth() + 1, 0).getDate();
+      result.setDate(Math.min(day, daysInMonth));
+    }
+
+    return result;
+  }
+
+  private findNextValidDate(rule: RecurrenceRule, startDate: Date): Date {
+    let currentDate = new Date(startDate);
+    let iterations = 0;
+    const maxIterations = 1000;
+
+    while (iterations < maxIterations) {
+      const nextDate = this.computeRawNextDate(rule, currentDate);
+      if (nextDate && nextDate >= startDate) {
+        return nextDate;
+      }
+      if (nextDate) {
+        currentDate = nextDate;
+      } else {
+        break;
+      }
+      iterations++;
+    }
+
+    return startDate;
+  }
+
+  private computeRawNextDate(rule: RecurrenceRule, date: Date): Date | null {
+    switch (rule.frequency) {
+      case "daily":
+        return this.nextDailyOccurrence(date, rule.interval);
+      case "weekly":
+        return this.nextWeeklyOccurrence(date, rule.interval, rule.weekdays || []);
+      case "monthly":
+        return this.nextMonthlyOccurrence(
+          date,
+          rule.interval,
+          rule.monthlyMode || "dayOfMonth",
+          rule.dayOfMonth,
+          rule.ordinalWeek,
+          rule.ordinalWeekday
+        );
+      case "yearly":
+        return this.nextYearlyOccurrence(date, rule.interval, rule.monthOfYear, rule.dayOfMonth);
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Generate human-readable summary for a recurrence rule
+   */
+  getHumanReadableSummary(rule: RecurrenceRule): string {
+    const parts: string[] = [];
+
+    switch (rule.frequency) {
+      case "daily":
+        parts.push(rule.interval === 1 ? "Every day" : `Every ${rule.interval} days`);
+        break;
+      case "weekly":
+        if (rule.weekdays && rule.weekdays.length > 0) {
+          const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+          const days = rule.weekdays.map((d) => dayNames[d - 1]).join(", ");
+          if (rule.interval === 1) {
+            parts.push(`Every ${days}`);
+          } else {
+            parts.push(`Every ${rule.interval} weeks on ${days}`);
+          }
+        } else {
+          parts.push(rule.interval === 1 ? "Every week" : `Every ${rule.interval} weeks`);
+        }
+        break;
+      case "monthly":
+        const monthText = rule.interval === 1 ? "Every month" : `Every ${rule.interval} months`;
+        if (rule.dayOfMonth) {
+          parts.push(`${monthText} on the ${this.ordinalString(rule.dayOfMonth)}`);
+        } else {
+          parts.push(monthText);
+        }
+        break;
+      case "yearly":
+        parts.push(rule.interval === 1 ? "Every year" : `Every ${rule.interval} years`);
+        break;
+    }
+
+    if (rule.anchor === "completionDate") {
+      parts.push("after completion");
+    }
+
+    return parts.join(" ");
+  }
+
+  private ordinalString(n: number): string {
+    const s = ["th", "st", "nd", "rd"];
+    const v = n % 100;
+    return n + (s[(v - 20) % 10] || s[v] || s[0]);
+  }
+}
+
+// ============================================================================
 // Workspace Rules Types
 // ============================================================================
 
@@ -290,6 +619,7 @@ const tools: Tool[] = [
         workspace: { type: "string", description: "Filter by workspace name (case-insensitive)" },
         include_completed: { type: "boolean", description: "Include completed tasks (default: false)" },
         include_tags: { type: "boolean", description: "Include tags for each task in results (default: false)" },
+        include_recurring_templates: { type: "boolean", description: "Include recurring task templates (default: false, normally hidden)" },
         due_before: { type: "string", description: "Filter tasks due on or before (today, tomorrow, YYYY-MM-DD)" },
         due_after: { type: "string", description: "Filter tasks due on or after" },
         limit: { type: "integer", description: "Maximum results (default: 20)" },
@@ -298,7 +628,7 @@ const tools: Tool[] = [
   },
   {
     name: "read_task",
-    description: "Get full details of a task by UUID.",
+    description: "Get full details of a task by UUID, including recurrence information.",
     inputSchema: {
       type: "object",
       properties: {
@@ -309,7 +639,7 @@ const tools: Tool[] = [
   },
   {
     name: "create_task",
-    description: "Create a new task.",
+    description: "Create a new task. For recurring tasks, use create_recurring_task instead.",
     inputSchema: {
       type: "object",
       properties: {
@@ -320,6 +650,38 @@ const tools: Tool[] = [
         is_urgent: { type: "boolean", description: "Mark as urgent" },
       },
       required: ["name"],
+    },
+  },
+  {
+    name: "create_recurring_task",
+    description: "Create a new recurring task with a recurrence rule.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Task name (required)" },
+        notes: { type: "string", description: "Additional notes" },
+        due_date: { type: "string", description: "First occurrence due date (required)" },
+        tags: { type: "array", items: { type: "string" }, description: "Tags to assign" },
+        is_urgent: { type: "boolean", description: "Mark as urgent" },
+        frequency: {
+          type: "string",
+          enum: ["daily", "weekly", "monthly", "yearly"],
+          description: "Recurrence frequency (required)",
+        },
+        interval: { type: "integer", description: "Interval between occurrences (default: 1)" },
+        weekdays: {
+          type: "array",
+          items: { type: "integer" },
+          description: "For weekly: days of week (1=Sun, 2=Mon, ..., 7=Sat)",
+        },
+        day_of_month: { type: "integer", description: "For monthly: day of month (1-31)" },
+        anchor: {
+          type: "string",
+          enum: ["scheduledDueDate", "completionDate"],
+          description: "Schedule from due date or completion date (default: scheduledDueDate)",
+        },
+      },
+      required: ["name", "due_date", "frequency"],
     },
   },
   {
@@ -339,12 +701,56 @@ const tools: Tool[] = [
   },
   {
     name: "complete_task",
-    description: "Mark a task as completed or uncompleted.",
+    description: "Mark a task as completed. For recurring tasks, automatically creates the next occurrence.",
     inputSchema: {
       type: "object",
       properties: {
         uuid: { type: "string", description: "Task UUID (required)" },
         completed: { type: "boolean", description: "Completion status (default: true)" },
+      },
+      required: ["uuid"],
+    },
+  },
+  {
+    name: "skip_recurring_task",
+    description: "Skip a recurring task occurrence without completing it. Creates the next occurrence.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        uuid: { type: "string", description: "Task UUID (required)" },
+      },
+      required: ["uuid"],
+    },
+  },
+  {
+    name: "pause_recurring_series",
+    description: "Pause a recurring task series. No new occurrences will be created until resumed.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        uuid: { type: "string", description: "Task UUID (can be template or any occurrence in the series)" },
+      },
+      required: ["uuid"],
+    },
+  },
+  {
+    name: "resume_recurring_series",
+    description: "Resume a paused recurring task series.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        uuid: { type: "string", description: "Task UUID (can be template or any occurrence in the series)" },
+      },
+      required: ["uuid"],
+    },
+  },
+  {
+    name: "end_recurring_series",
+    description: "Permanently end a recurring task series. No more occurrences will be created.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        uuid: { type: "string", description: "Task UUID (can be template or any occurrence in the series)" },
       },
       required: ["uuid"],
     },
@@ -500,9 +906,11 @@ const tools: Tool[] = [
 
 class ToolExecutor {
   private client: SupabaseClient;
+  private recurrenceEngine: RecurrenceEngine;
 
   constructor(client: SupabaseClient) {
     this.client = client;
+    this.recurrenceEngine = new RecurrenceEngine();
   }
 
   async execute(name: string, args: Record<string, unknown>): Promise<string> {
@@ -514,10 +922,20 @@ class ToolExecutor {
           return await this.readTask(args);
         case "create_task":
           return await this.createTask(args);
+        case "create_recurring_task":
+          return await this.createRecurringTask(args);
         case "update_task":
           return await this.updateTask(args);
         case "complete_task":
           return await this.completeTask(args);
+        case "skip_recurring_task":
+          return await this.skipRecurringTask(args);
+        case "pause_recurring_series":
+          return await this.pauseRecurringSeries(args);
+        case "resume_recurring_series":
+          return await this.resumeRecurringSeries(args);
+        case "end_recurring_series":
+          return await this.endRecurringSeries(args);
         case "delete_task":
           return await this.deleteTask(args);
         case "search_notes":
@@ -564,6 +982,11 @@ class ToolExecutor {
       filters.push("status=eq.false");
     }
 
+    // By default, hide recurring templates (they're not actionable tasks)
+    if (!args.include_recurring_templates) {
+      filters.push("is_recurring_template=eq.false");
+    }
+
     const dueBefore = parseDate(args.due_before as string);
     if (dueBefore) {
       const nextDay = new Date(dueBefore);
@@ -579,8 +1002,8 @@ class ToolExecutor {
     // When filtering by tags or workspace, fetch more initially since we filter in memory
     const hasTagFilter = !!(args.tags as string[])?.length;
     const hasWorkspaceFilter = !!(args.workspace as string);
-    const initialLimit = (hasTagFilter || hasWorkspaceFilter) ? 1000 : ((args.limit as number) || 100);
-    
+    const initialLimit = hasTagFilter || hasWorkspaceFilter ? 1000 : (args.limit as number) || 100;
+
     let tasks = await this.client.select<Record<string, unknown>>("tasks", {
       filters,
       order: "due_date.asc.nullslast",
@@ -592,8 +1015,8 @@ class ToolExecutor {
     if (query) {
       const lower = query.toLowerCase();
       tasks = tasks.filter((t) => {
-        const name = (t.name as string || "").toLowerCase();
-        const note = (t.note as string || "").toLowerCase();
+        const name = ((t.name as string) || "").toLowerCase();
+        const note = ((t.note as string) || "").toLowerCase();
         return name.includes(lower) || note.includes(lower);
       });
     }
@@ -643,6 +1066,12 @@ class ToolExecutor {
           is_urgent: t.is_urgent_alarm || undefined,
         };
 
+        // Add recurrence info if present
+        if (t.series_id) {
+          result.is_recurring = true;
+          result.recurrence_summary = t.recurrence_summary || undefined;
+        }
+
         if (includeTags) {
           const tagNames = await this.getTagNamesForTask(t.id as string);
           if (tagNames.length > 0) {
@@ -673,22 +1102,43 @@ class ToolExecutor {
     const t = tasks[0];
     const tagNames = await this.getTagNamesForTask(uuid);
 
-    return JSON.stringify(
-      {
-        uuid: t.id,
-        name: t.name,
-        notes: t.note,
-        completed: t.status,
-        due_date: t.due_date ? formatDate(t.due_date as string) : undefined,
-        created: formatDate(t.created_at as string),
-        completed_date: t.completed_date ? formatDate(t.completed_date as string) : undefined,
-        recurrence: t.recurrence_summary,
-        is_urgent: t.is_urgent_alarm,
-        tags: tagNames.length ? tagNames : undefined,
-      },
-      null,
-      2
-    );
+    const result: Record<string, unknown> = {
+      uuid: t.id,
+      name: t.name,
+      notes: t.note,
+      completed: t.status,
+      due_date: t.due_date ? formatDate(t.due_date as string) : undefined,
+      created: formatDate(t.created_at as string),
+      completed_date: t.completed_date ? formatDate(t.completed_date as string) : undefined,
+      is_urgent: t.is_urgent_alarm,
+      tags: tagNames.length ? tagNames : undefined,
+    };
+
+    // Add recurrence information
+    if (t.series_id) {
+      result.is_recurring = true;
+      result.series_id = t.series_id;
+      result.is_recurring_template = t.is_recurring_template;
+      result.recurrence_summary = t.recurrence_summary;
+      result.recurrence_status = t.recurrence_status;
+
+      // If this is an occurrence, get info about the series
+      if (!t.is_recurring_template) {
+        const templates = await this.client.select<Record<string, unknown>>("tasks", {
+          filters: [
+            `series_id=eq.${t.series_id}`,
+            "is_recurring_template=eq.true",
+            `user_id=eq.${this.client.getUserID()}`,
+          ],
+          limit: 1,
+        });
+        if (templates.length > 0) {
+          result.series_status = templates[0].recurrence_status;
+        }
+      }
+    }
+
+    return JSON.stringify(result, null, 2);
   }
 
   private async createTask(args: Record<string, unknown>): Promise<string> {
@@ -711,7 +1161,7 @@ class ToolExecutor {
       created_at: now,
       updated_at: now,
       is_deleted: false,
-      source: "00000000-0000-0000-0000-000000000000",  // Required for app visibility
+      source: "00000000-0000-0000-0000-000000000000",
     });
 
     // Handle tags
@@ -727,6 +1177,101 @@ class ToolExecutor {
       success: true,
       uuid,
       message: `Created task: ${name}`,
+    });
+  }
+
+  private async createRecurringTask(args: Record<string, unknown>): Promise<string> {
+    const name = args.name as string;
+    const frequency = args.frequency as RecurrenceFrequency;
+    const dueDateInput = args.due_date as string;
+
+    if (!name) return JSON.stringify({ error: "Task name is required" });
+    if (!frequency) return JSON.stringify({ error: "Frequency is required" });
+    if (!dueDateInput) return JSON.stringify({ error: "Due date is required for recurring tasks" });
+
+    const dueDate = parseDate(dueDateInput);
+    if (!dueDate) return JSON.stringify({ error: "Invalid due date" });
+
+    const seriesID = crypto.randomUUID();
+    const templateUUID = crypto.randomUUID();
+    const occurrenceUUID = crypto.randomUUID();
+    const now = new Date().toISOString();
+
+    // Build the recurrence rule
+    const rule: RecurrenceRule = {
+      frequency,
+      interval: (args.interval as number) || 1,
+      anchor: (args.anchor as RecurrenceAnchor) || "scheduledDueDate",
+      endCondition: { type: "never" },
+      occurrencesGenerated: 1,
+    };
+
+    if (args.weekdays) {
+      rule.weekdays = args.weekdays as number[];
+    }
+    if (args.day_of_month) {
+      rule.dayOfMonth = args.day_of_month as number;
+      rule.monthlyMode = "dayOfMonth";
+    }
+
+    const recurrenceSummary = this.recurrenceEngine.getHumanReadableSummary(rule);
+
+    // Create the template (hidden master task)
+    await this.client.insert("tasks", {
+      id: templateUUID,
+      user_id: this.client.getUserID(),
+      name,
+      note: args.notes || null,
+      status: false,
+      due_date: dueDate.toISOString(),
+      is_urgent_alarm: args.is_urgent || false,
+      is_recurring_template: true,
+      series_id: seriesID,
+      recurrence_rule_data: JSON.stringify(rule),
+      recurrence_summary: recurrenceSummary,
+      recurrence_status: "active",
+      created_at: now,
+      updated_at: now,
+      is_deleted: false,
+      source: "00000000-0000-0000-0000-000000000000",
+    });
+
+    // Create the first occurrence
+    await this.client.insert("tasks", {
+      id: occurrenceUUID,
+      user_id: this.client.getUserID(),
+      name,
+      note: args.notes || null,
+      status: false,
+      due_date: dueDate.toISOString(),
+      is_urgent_alarm: args.is_urgent || false,
+      is_recurring_template: false,
+      series_id: seriesID,
+      recurrence_parent_id: templateUUID,
+      recurrence_summary: recurrenceSummary,
+      created_at: now,
+      updated_at: now,
+      is_deleted: false,
+      source: "00000000-0000-0000-0000-000000000000",
+    });
+
+    // Handle tags for both template and occurrence
+    const tagNames = args.tags as string[];
+    if (tagNames?.length) {
+      const tagIDs = await this.getOrCreateTagIDs(tagNames);
+      for (const tagID of tagIDs) {
+        await this.client.insert("task_tags", { task_id: templateUUID, tag_id: tagID });
+        await this.client.insert("task_tags", { task_id: occurrenceUUID, tag_id: tagID });
+      }
+    }
+
+    return JSON.stringify({
+      success: true,
+      uuid: occurrenceUUID,
+      template_uuid: templateUUID,
+      series_id: seriesID,
+      recurrence_summary: recurrenceSummary,
+      message: `Created recurring task: ${name} (${recurrenceSummary})`,
     });
   }
 
@@ -753,9 +1298,10 @@ class ToolExecutor {
     if (!uuid) return JSON.stringify({ error: "UUID required" });
 
     const completed = args.completed !== false;
-    const now = new Date().toISOString();
+    const now = new Date();
+    const nowISO = now.toISOString();
 
-    // Get task name
+    // Get the task
     const tasks = await this.client.select<Record<string, unknown>>("tasks", {
       filters: [`id=eq.${uuid}`, `user_id=eq.${this.client.getUserID()}`],
       limit: 1,
@@ -763,16 +1309,138 @@ class ToolExecutor {
 
     if (tasks.length === 0) return `Task not found with UUID: ${uuid}`;
 
+    const task = tasks[0];
+
+    // Mark the task as complete
     await this.client.update("tasks", [`id=eq.${uuid}`], {
       status: completed,
-      completed_date: completed ? now : null,
-      updated_at: now,
+      completed_date: completed ? nowISO : null,
+      updated_at: nowISO,
     });
 
     const action = completed ? "completed" : "uncompleted";
+    let message = `Task '${task.name}' marked as ${action}`;
+
+    // Handle recurring task completion
+    if (completed && task.series_id && !task.is_recurring_template) {
+      const nextOccurrence = await this.createNextOccurrence(task, now);
+      if (nextOccurrence) {
+        message += `. Next occurrence created for ${formatDate(nextOccurrence.dueDate)}`;
+      }
+    }
+
     return JSON.stringify({
       success: true,
-      message: `Task '${tasks[0].name}' marked as ${action}`,
+      message,
+    });
+  }
+
+  private async skipRecurringTask(args: Record<string, unknown>): Promise<string> {
+    const uuid = args.uuid as string;
+    if (!uuid) return JSON.stringify({ error: "UUID required" });
+
+    const now = new Date();
+    const nowISO = now.toISOString();
+
+    // Get the task
+    const tasks = await this.client.select<Record<string, unknown>>("tasks", {
+      filters: [`id=eq.${uuid}`, `user_id=eq.${this.client.getUserID()}`],
+      limit: 1,
+    });
+
+    if (tasks.length === 0) return `Task not found with UUID: ${uuid}`;
+
+    const task = tasks[0];
+
+    if (!task.series_id || task.is_recurring_template) {
+      return JSON.stringify({ error: "This task is not a recurring occurrence" });
+    }
+
+    // Mark as skipped
+    await this.client.update("tasks", [`id=eq.${uuid}`], {
+      is_skipped: true,
+      updated_at: nowISO,
+    });
+
+    // Create next occurrence (using scheduled due date as anchor for skips)
+    const nextOccurrence = await this.createNextOccurrence(task, now, true);
+
+    let message = `Skipped task '${task.name}'`;
+    if (nextOccurrence) {
+      message += `. Next occurrence created for ${formatDate(nextOccurrence.dueDate)}`;
+    }
+
+    return JSON.stringify({ success: true, message });
+  }
+
+  private async pauseRecurringSeries(args: Record<string, unknown>): Promise<string> {
+    const uuid = args.uuid as string;
+    if (!uuid) return JSON.stringify({ error: "UUID required" });
+
+    const template = await this.findSeriesTemplate(uuid);
+    if (!template) {
+      return JSON.stringify({ error: "Task is not part of a recurring series" });
+    }
+
+    await this.client.update("tasks", [`id=eq.${template.id}`], {
+      recurrence_status: "paused",
+      updated_at: new Date().toISOString(),
+    });
+
+    return JSON.stringify({
+      success: true,
+      message: `Paused recurring series '${template.name}'`,
+    });
+  }
+
+  private async resumeRecurringSeries(args: Record<string, unknown>): Promise<string> {
+    const uuid = args.uuid as string;
+    if (!uuid) return JSON.stringify({ error: "UUID required" });
+
+    const template = await this.findSeriesTemplate(uuid);
+    if (!template) {
+      return JSON.stringify({ error: "Task is not part of a recurring series" });
+    }
+
+    const now = new Date();
+    await this.client.update("tasks", [`id=eq.${template.id}`], {
+      recurrence_status: "active",
+      updated_at: now.toISOString(),
+    });
+
+    // Check if we need to create an occurrence
+    const hasOpen = await this.hasOpenOccurrence(template.series_id as string);
+    let message = `Resumed recurring series '${template.name}'`;
+
+    if (!hasOpen && template.recurrence_rule_data) {
+      const rule = JSON.parse(template.recurrence_rule_data as string) as RecurrenceRule;
+      const nextDueDate = this.recurrenceEngine.nextOccurrenceDate(rule, now, now);
+      if (nextDueDate) {
+        await this.createOccurrenceTask(template, nextDueDate);
+        message += `. Created occurrence for ${formatDate(nextDueDate)}`;
+      }
+    }
+
+    return JSON.stringify({ success: true, message });
+  }
+
+  private async endRecurringSeries(args: Record<string, unknown>): Promise<string> {
+    const uuid = args.uuid as string;
+    if (!uuid) return JSON.stringify({ error: "UUID required" });
+
+    const template = await this.findSeriesTemplate(uuid);
+    if (!template) {
+      return JSON.stringify({ error: "Task is not part of a recurring series" });
+    }
+
+    await this.client.update("tasks", [`id=eq.${template.id}`], {
+      recurrence_status: "ended",
+      updated_at: new Date().toISOString(),
+    });
+
+    return JSON.stringify({
+      success: true,
+      message: `Ended recurring series '${template.name}'. No more occurrences will be created.`,
     });
   }
 
@@ -787,6 +1455,8 @@ class ToolExecutor {
 
     if (tasks.length === 0) return `Task not found with UUID: ${uuid}`;
 
+    const task = tasks[0];
+
     if (args.permanent) {
       await this.client.delete("task_tags", [`task_id=eq.${uuid}`]);
       await this.client.delete("tasks", [`id=eq.${uuid}`, `user_id=eq.${this.client.getUserID()}`]);
@@ -797,6 +1467,11 @@ class ToolExecutor {
         is_deleted: true,
         updated_at: now,
       });
+
+      // If this is a recurring occurrence, create the next one
+      if (task.series_id && !task.is_recurring_template && task.due_date) {
+        await this.createNextOccurrenceAfterDelete(task);
+      }
     }
 
     const action = args.permanent ? "permanently deleted" : "moved to trash";
@@ -807,14 +1482,208 @@ class ToolExecutor {
   }
 
   // --------------------------------------------------------------------------
+  // Recurrence Helpers
+  // --------------------------------------------------------------------------
+
+  private async findSeriesTemplate(uuid: string): Promise<Record<string, unknown> | null> {
+    // First get the task
+    const tasks = await this.client.select<Record<string, unknown>>("tasks", {
+      filters: [`id=eq.${uuid}`, `user_id=eq.${this.client.getUserID()}`],
+      limit: 1,
+    });
+
+    if (tasks.length === 0) return null;
+
+    const task = tasks[0];
+    if (!task.series_id) return null;
+
+    // If it's already the template, return it
+    if (task.is_recurring_template) return task;
+
+    // Find the template
+    const templates = await this.client.select<Record<string, unknown>>("tasks", {
+      filters: [
+        `series_id=eq.${task.series_id}`,
+        "is_recurring_template=eq.true",
+        `user_id=eq.${this.client.getUserID()}`,
+      ],
+      limit: 1,
+    });
+
+    return templates.length > 0 ? templates[0] : null;
+  }
+
+  private async hasOpenOccurrence(seriesID: string): Promise<boolean> {
+    const occurrences = await this.client.select<Record<string, unknown>>("tasks", {
+      filters: [
+        `series_id=eq.${seriesID}`,
+        "is_recurring_template=eq.false",
+        "status=eq.false",
+        "is_skipped=eq.false",
+        "is_deleted=eq.false",
+        `user_id=eq.${this.client.getUserID()}`,
+      ],
+      limit: 1,
+    });
+
+    return occurrences.length > 0;
+  }
+
+  private async createNextOccurrence(
+    task: Record<string, unknown>,
+    completionDate: Date,
+    isSkip: boolean = false
+  ): Promise<{ uuid: string; dueDate: Date } | null> {
+    const seriesID = task.series_id as string;
+    if (!seriesID) return null;
+
+    // Find the template
+    const templates = await this.client.select<Record<string, unknown>>("tasks", {
+      filters: [
+        `series_id=eq.${seriesID}`,
+        "is_recurring_template=eq.true",
+        `user_id=eq.${this.client.getUserID()}`,
+      ],
+      limit: 1,
+    });
+
+    if (templates.length === 0) return null;
+
+    const template = templates[0];
+
+    // Check if series is active
+    if (template.recurrence_status !== "active") return null;
+
+    // Parse the recurrence rule
+    if (!template.recurrence_rule_data) return null;
+
+    let rule: RecurrenceRule;
+    try {
+      rule = JSON.parse(template.recurrence_rule_data as string) as RecurrenceRule;
+    } catch {
+      return null;
+    }
+
+    // Determine anchor date
+    let anchorDate: Date;
+    if (isSkip || rule.anchor === "scheduledDueDate") {
+      anchorDate = task.due_date ? new Date(task.due_date as string) : completionDate;
+    } else {
+      anchorDate = completionDate;
+    }
+
+    // Calculate next occurrence date
+    const nextDueDate = this.recurrenceEngine.nextOccurrenceDate(rule, anchorDate);
+    if (!nextDueDate) {
+      // End the series
+      await this.client.update("tasks", [`id=eq.${template.id}`], {
+        recurrence_status: "ended",
+        updated_at: new Date().toISOString(),
+      });
+      return null;
+    }
+
+    // Check if there's already an open occurrence
+    if (await this.hasOpenOccurrence(seriesID)) {
+      return null;
+    }
+
+    // Update occurrences count on template
+    rule.occurrencesGenerated = (rule.occurrencesGenerated || 0) + 1;
+    await this.client.update("tasks", [`id=eq.${template.id}`], {
+      recurrence_rule_data: JSON.stringify(rule),
+      updated_at: new Date().toISOString(),
+    });
+
+    // Create the occurrence
+    return await this.createOccurrenceTask(template, nextDueDate);
+  }
+
+  private async createNextOccurrenceAfterDelete(task: Record<string, unknown>): Promise<void> {
+    const seriesID = task.series_id as string;
+    if (!seriesID) return;
+
+    // Find the template
+    const templates = await this.client.select<Record<string, unknown>>("tasks", {
+      filters: [
+        `series_id=eq.${seriesID}`,
+        "is_recurring_template=eq.true",
+        `user_id=eq.${this.client.getUserID()}`,
+      ],
+      limit: 1,
+    });
+
+    if (templates.length === 0) return;
+
+    const template = templates[0];
+    if (template.recurrence_status !== "active") return;
+
+    // Check if there's already an open occurrence
+    if (await this.hasOpenOccurrence(seriesID)) return;
+
+    // Parse rule and calculate next date from the deleted task's due date
+    if (!template.recurrence_rule_data) return;
+
+    let rule: RecurrenceRule;
+    try {
+      rule = JSON.parse(template.recurrence_rule_data as string) as RecurrenceRule;
+    } catch {
+      return;
+    }
+
+    const deletedDueDate = task.due_date ? new Date(task.due_date as string) : new Date();
+    const nextDueDate = this.recurrenceEngine.nextOccurrenceDate(rule, deletedDueDate);
+
+    if (nextDueDate) {
+      await this.createOccurrenceTask(template, nextDueDate);
+    }
+  }
+
+  private async createOccurrenceTask(
+    template: Record<string, unknown>,
+    dueDate: Date
+  ): Promise<{ uuid: string; dueDate: Date }> {
+    const uuid = crypto.randomUUID();
+    const now = new Date().toISOString();
+
+    await this.client.insert("tasks", {
+      id: uuid,
+      user_id: this.client.getUserID(),
+      name: template.name,
+      note: template.note || null,
+      status: false,
+      due_date: dueDate.toISOString(),
+      is_urgent_alarm: template.is_urgent_alarm || false,
+      is_recurring_template: false,
+      series_id: template.series_id,
+      recurrence_parent_id: template.id,
+      recurrence_summary: template.recurrence_summary,
+      is_skipped: false,
+      created_at: now,
+      updated_at: now,
+      is_deleted: false,
+      source: "00000000-0000-0000-0000-000000000000",
+    });
+
+    // Copy tags from template
+    const templateTags = await this.client.select<Record<string, unknown>>("task_tags", {
+      filters: [`task_id=eq.${template.id}`],
+      limit: 100,
+    });
+
+    for (const tag of templateTags) {
+      await this.client.insert("task_tags", { task_id: uuid, tag_id: tag.tag_id });
+    }
+
+    return { uuid, dueDate };
+  }
+
+  // --------------------------------------------------------------------------
   // Note Tools
   // --------------------------------------------------------------------------
 
   private async searchNotes(args: Record<string, unknown>): Promise<string> {
-    const filters = [
-      `user_id=eq.${this.client.getUserID()}`,
-      "is_deleted=eq.false",
-    ];
+    const filters = [`user_id=eq.${this.client.getUserID()}`, "is_deleted=eq.false"];
 
     if (!args.include_archived) {
       filters.push("in_archive=eq.false");
@@ -823,7 +1692,7 @@ class ToolExecutor {
     let notes = await this.client.select<Record<string, unknown>>("notes", {
       filters,
       order: "updated_at.desc",
-      limit: (args.limit as number) || 100, // Fetch more initially for workspace filtering
+      limit: (args.limit as number) || 100,
     });
 
     // Filter by query text
@@ -831,8 +1700,8 @@ class ToolExecutor {
     if (query) {
       const lower = query.toLowerCase();
       notes = notes.filter((n) => {
-        const title = (n.first_line_clean as string || "").toLowerCase();
-        const content = (n.content as string || "").toLowerCase();
+        const title = ((n.first_line_clean as string) || "").toLowerCase();
+        const content = ((n.content as string) || "").toLowerCase();
         return title.includes(lower) || content.includes(lower);
       });
     }
@@ -849,7 +1718,7 @@ class ToolExecutor {
       }
     }
 
-    // Filter by tags (applied after workspace filter)
+    // Filter by tags
     const tagNames = args.tags as string[];
     if (tagNames?.length) {
       const tagIDs = await this.getTagIDsByNames(tagNames);
@@ -896,7 +1765,7 @@ class ToolExecutor {
     if (n.trashed_date || n.is_deleted) return "This note has been deleted.";
 
     const tagNames = await this.getTagNamesForNote(uuid);
-    let content = n.content as string || "";
+    let content = (n.content as string) || "";
     if (content.length > 50000) {
       content = content.slice(0, 50000) + "\n\n[Truncated]";
     }
@@ -1112,7 +1981,6 @@ class ToolExecutor {
       }
 
       await this.client.insert("note_tags", { note_id: uuid, tag_id: tagID });
-      // Touch note's updated_at to trigger realtime sync
       await this.client.update("notes", [`id=eq.${uuid}`], { updated_at: new Date().toISOString() });
     } else {
       const tasks = await this.client.select<Record<string, unknown>>("tasks", {
@@ -1131,7 +1999,6 @@ class ToolExecutor {
       }
 
       await this.client.insert("task_tags", { task_id: uuid, tag_id: tagID });
-      // Touch task's updated_at to trigger realtime sync
       await this.client.update("tasks", [`id=eq.${uuid}`], { updated_at: new Date().toISOString() });
     }
 
@@ -1158,11 +2025,9 @@ class ToolExecutor {
 
     if (itemType === "note") {
       await this.client.delete("note_tags", [`note_id=eq.${uuid}`, `tag_id=eq.${tagID}`]);
-      // Touch note's updated_at to trigger realtime sync
       await this.client.update("notes", [`id=eq.${uuid}`], { updated_at: new Date().toISOString() });
     } else {
       await this.client.delete("task_tags", [`task_id=eq.${uuid}`, `tag_id=eq.${tagID}`]);
-      // Touch task's updated_at to trigger realtime sync
       await this.client.update("tasks", [`id=eq.${uuid}`], { updated_at: new Date().toISOString() });
     }
 
@@ -1180,7 +2045,7 @@ class ToolExecutor {
       limit: 100,
     });
 
-    const includeRules = args.include_rules !== false; // Default to true
+    const includeRules = args.include_rules !== false;
 
     const results = workspaces.map((w) => {
       const result: Record<string, unknown> = {
@@ -1203,7 +2068,6 @@ class ToolExecutor {
   private async readWorkspace(args: Record<string, unknown>): Promise<string> {
     let workspace: Record<string, unknown> | null = null;
 
-    // Support lookup by UUID or name
     if (args.uuid) {
       const uuid = args.uuid as string;
       const workspaces = await this.client.select<Record<string, unknown>>("workspaces", {
@@ -1262,7 +2126,6 @@ class ToolExecutor {
   private async getTagIDsByNames(names: string[]): Promise<string[]> {
     const ids: string[] = [];
     for (const name of names) {
-      // Try exact match first, then case-insensitive
       let tags = await this.client.select<Record<string, unknown>>("tags", {
         filters: [`user_id=eq.${this.client.getUserID()}`, `name=eq.${name}`],
         limit: 1,
@@ -1306,25 +2169,22 @@ class ToolExecutor {
   }
 
   private async getTaskIDsWithTags(tagIDs: string[]): Promise<Set<string>> {
-    // Use intersection (AND logic) - task must have ALL specified tags
     let resultSet: Set<string> | null = null;
-    
+
     for (const tagID of tagIDs) {
       const junctions = await this.client.select<Record<string, unknown>>("task_tags", {
         filters: [`tag_id=eq.${tagID}`],
         limit: 1000,
       });
-      
+
       const taskIDsForTag = new Set<string>();
       for (const j of junctions) {
         taskIDsForTag.add(j.task_id as string);
       }
-      
+
       if (resultSet === null) {
-        // First tag - initialize with all its tasks
         resultSet = taskIDsForTag;
       } else {
-        // Subsequent tags - intersect (keep only tasks that have this tag too)
         const intersection = new Set<string>();
         for (const id of resultSet) {
           if (taskIDsForTag.has(id)) {
@@ -1334,25 +2194,24 @@ class ToolExecutor {
         resultSet = intersection;
       }
     }
-    
+
     return resultSet ?? new Set<string>();
   }
 
   private async getNoteIDsWithTags(tagIDs: string[]): Promise<Set<string>> {
-    // Use intersection (AND logic) - note must have ALL specified tags
     let resultSet: Set<string> | null = null;
-    
+
     for (const tagID of tagIDs) {
       const junctions = await this.client.select<Record<string, unknown>>("note_tags", {
         filters: [`tag_id=eq.${tagID}`],
         limit: 1000,
       });
-      
+
       const noteIDsForTag = new Set<string>();
       for (const j of junctions) {
         noteIDsForTag.add(j.note_id as string);
       }
-      
+
       if (resultSet === null) {
         resultSet = noteIDsForTag;
       } else {
@@ -1365,7 +2224,7 @@ class ToolExecutor {
         resultSet = intersection;
       }
     }
-    
+
     return resultSet ?? new Set<string>();
   }
 
@@ -1407,31 +2266,22 @@ class ToolExecutor {
   // Workspace Filtering Helpers
   // --------------------------------------------------------------------------
 
-  /**
-   * Get IDs of items (tasks or notes) that match a workspace's rules.
-   * Returns:
-   * - null if workspace not found
-   * - "all" if workspace has no filtering rules (all items match)
-   * - Set<string> of matching item IDs
-   */
   private async getWorkspaceFilteredIDs(
     workspaceName: string,
     itemType: "task" | "note"
   ): Promise<Set<string> | "all" | null> {
-    // Find workspace by name
     const workspaces = await this.client.select<Record<string, unknown>>("workspaces", {
       filters: [`user_id=eq.${this.client.getUserID()}`, `name=ilike.${workspaceName}`],
       limit: 1,
     });
 
     if (workspaces.length === 0) {
-      return null; // Workspace not found
+      return null;
     }
 
     const workspace = workspaces[0];
     const rules = parseWorkspaceRules(workspace.rules_data);
 
-    // No rules or empty rules = all items match
     if (!rules) {
       return "all";
     }
@@ -1441,12 +2291,8 @@ class ToolExecutor {
       return "all";
     }
 
-    // Build tag name -> ID cache
     const allTagNames = [
-      ...new Set([
-        ...nonEmptyGroups.flatMap((g) => g.tagNames),
-        ...rules.excludeTags,
-      ]),
+      ...new Set([...nonEmptyGroups.flatMap((g) => g.tagNames), ...rules.excludeTags]),
     ];
 
     const tagCache = new Map<string, string>();
@@ -1463,7 +2309,6 @@ class ToolExecutor {
     const junctionTable = itemType === "task" ? "task_tags" : "note_tags";
     const idField = itemType === "task" ? "task_id" : "note_id";
 
-    // Process include groups
     let matchingIDs: Set<string> | null = null;
 
     if (nonEmptyGroups.length > 0) {
@@ -1475,21 +2320,14 @@ class ToolExecutor {
           .filter(Boolean) as string[];
 
         if (tagIDs.length === 0) {
-          // Group references tags that don't exist - no matches for this group
           groupResults.push(new Set());
           continue;
         }
 
-        const groupItemIDs = await this.getItemsMatchingTags(
-          junctionTable,
-          idField,
-          tagIDs,
-          group.matchType
-        );
+        const groupItemIDs = await this.getItemsMatchingTags(junctionTable, idField, tagIDs, group.matchType);
         groupResults.push(groupItemIDs);
       }
 
-      // Combine groups based on combinator
       if (groupResults.length > 0) {
         if (rules.groupCombinator === "OR") {
           matchingIDs = this.unionSets(groupResults);
@@ -1499,10 +2337,7 @@ class ToolExecutor {
       }
     }
 
-    // If no include rules, start with all items that have any tags
-    // (we'll filter by excludes only)
     if (matchingIDs === null && rules.excludeTags.length > 0) {
-      // Get all items
       const allItems = await this.client.select<Record<string, unknown>>(
         itemType === "task" ? "tasks" : "notes",
         {
@@ -1513,7 +2348,6 @@ class ToolExecutor {
       matchingIDs = new Set(allItems.map((item) => item.id as string));
     }
 
-    // Apply exclusions
     if (rules.excludeTags.length > 0 && matchingIDs !== null) {
       const excludeTagIDs = rules.excludeTags
         .map((name) => tagCache.get(name.toLowerCase()))
@@ -1522,7 +2356,6 @@ class ToolExecutor {
       if (excludeTagIDs.length > 0) {
         const excludedItems = await this.getItemsWithAnyTag(junctionTable, idField, excludeTagIDs);
 
-        // Remove excluded items
         for (const id of excludedItems) {
           matchingIDs.delete(id);
         }
@@ -1532,9 +2365,6 @@ class ToolExecutor {
     return matchingIDs || new Set();
   }
 
-  /**
-   * Get items that match tags based on matchType (ANY of / ALL of)
-   */
   private async getItemsMatchingTags(
     table: string,
     idField: string,
@@ -1544,7 +2374,6 @@ class ToolExecutor {
     const itemIDs = new Set<string>();
 
     if (matchType === "Any of") {
-      // OR logic: item has any of the tags
       for (const tagID of tagIDs) {
         const junctions = await this.client.select<Record<string, unknown>>(table, {
           filters: [`tag_id=eq.${tagID}`],
@@ -1555,10 +2384,8 @@ class ToolExecutor {
         }
       }
     } else {
-      // AND logic: item has all tags
       if (tagIDs.length === 0) return itemIDs;
 
-      // Get items for first tag
       const firstTagJunctions = await this.client.select<Record<string, unknown>>(table, {
         filters: [`tag_id=eq.${tagIDs[0]}`],
         limit: 10000,
@@ -1566,7 +2393,6 @@ class ToolExecutor {
 
       const candidates = new Set(firstTagJunctions.map((j) => j[idField] as string));
 
-      // Check remaining tags - item must have all
       for (let i = 1; i < tagIDs.length; i++) {
         const junctions = await this.client.select<Record<string, unknown>>(table, {
           filters: [`tag_id=eq.${tagIDs[i]}`],
@@ -1574,7 +2400,6 @@ class ToolExecutor {
         });
         const hasTag = new Set(junctions.map((j) => j[idField] as string));
 
-        // Keep only items that have this tag too
         for (const id of candidates) {
           if (!hasTag.has(id)) {
             candidates.delete(id);
@@ -1588,14 +2413,7 @@ class ToolExecutor {
     return itemIDs;
   }
 
-  /**
-   * Get items that have any of the specified tags
-   */
-  private async getItemsWithAnyTag(
-    table: string,
-    idField: string,
-    tagIDs: string[]
-  ): Promise<Set<string>> {
+  private async getItemsWithAnyTag(table: string, idField: string, tagIDs: string[]): Promise<Set<string>> {
     const itemIDs = new Set<string>();
     for (const tagID of tagIDs) {
       const junctions = await this.client.select<Record<string, unknown>>(table, {
@@ -1609,9 +2427,6 @@ class ToolExecutor {
     return itemIDs;
   }
 
-  /**
-   * Union multiple sets
-   */
   private unionSets(sets: Set<string>[]): Set<string> {
     const result = new Set<string>();
     for (const set of sets) {
@@ -1622,9 +2437,6 @@ class ToolExecutor {
     return result;
   }
 
-  /**
-   * Intersect multiple sets
-   */
   private intersectSets(sets: Set<string>[]): Set<string> {
     if (sets.length === 0) return new Set();
     if (sets.length === 1) return sets[0];
@@ -1650,25 +2462,19 @@ async function main() {
   const client = new SupabaseClient(config);
   const executor = new ToolExecutor(client);
 
-  const server = new Server(
-    { name: "streamline-mcp", version: "1.0.0" },
-    { capabilities: { tools: {} } }
-  );
+  const server = new Server({ name: "streamline-mcp", version: "1.1.0" }, { capabilities: { tools: {} } });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const result = await executor.execute(
-      request.params.name,
-      (request.params.arguments || {}) as Record<string, unknown>
-    );
+    const result = await executor.execute(request.params.name, (request.params.arguments || {}) as Record<string, unknown>);
     return { content: [{ type: "text", text: result }] };
   });
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  console.error("Streamline MCP server running");
+  console.error("Streamline MCP server running (v1.1.0 with recurrence support)");
 }
 
 main().catch(console.error);
