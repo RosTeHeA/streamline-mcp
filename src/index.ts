@@ -7,9 +7,11 @@ import {
   ListToolsRequestSchema,
   Tool,
 } from "@modelcontextprotocol/sdk/types.js";
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, existsSync, realpathSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
+import { pathToFileURL } from "url";
+import { appendTaskNote, appendTaskNoteTool } from "./append-task-note.js";
 
 // ============================================================================
 // Configuration
@@ -61,7 +63,7 @@ function loadConfig(): Config {
 // Supabase Client
 // ============================================================================
 
-class SupabaseClient {
+export class SupabaseClient {
   private baseURL: string;
   private headers: Record<string, string>;
   private userID: string;
@@ -160,6 +162,24 @@ class SupabaseClient {
 
     if (!response.ok) {
       throw new Error(`Supabase error: ${response.status} ${await response.text()}`);
+    }
+  }
+
+  async rpc<T>(name: string, parameters: Record<string, unknown>): Promise<T> {
+    try {
+      const response = await fetch(`${this.baseURL}/rpc/${name}`, {
+        method: "POST",
+        headers: this.headers,
+        body: JSON.stringify(parameters),
+      });
+      if (!response.ok) {
+        // Do not reflect database messages (which can contain note text).
+        throw new Error(`HTTP ${response.status}`);
+      }
+      return await response.json() as T;
+    } catch {
+      // Transport and JSON failures can happen after the transaction commits.
+      throw new Error("Append RPC failed or its result is uncertain. Confirm the migration is deployed. Retry only with the same request_id and content; never use a new key to retry.");
     }
   }
 
@@ -607,7 +627,8 @@ function getRulesSummary(rules: WorkspaceRules): string {
 // Tool Definitions
 // ============================================================================
 
-const tools: Tool[] = [
+export const tools: Tool[] = [
+  appendTaskNoteTool,
   {
     name: "search_tasks",
     description: "Search tasks by name, tags, due date, status, or workspace.",
@@ -686,13 +707,13 @@ const tools: Tool[] = [
   },
   {
     name: "update_task",
-    description: "Update a task.",
+    description: "Update a task. The notes field intentionally replaces all existing notes; use append_task_note for contributions.",
     inputSchema: {
       type: "object",
       properties: {
         uuid: { type: "string", description: "Task UUID (required)" },
         name: { type: "string", description: "New name" },
-        notes: { type: "string", description: "New notes" },
+        notes: { type: "string", description: "Replace all existing notes (intentional rewrite only)" },
         due_date: { type: "string", description: "New due date" },
         is_urgent: { type: "boolean", description: "Urgency status" },
       },
@@ -904,7 +925,7 @@ const tools: Tool[] = [
 // Tool Executor
 // ============================================================================
 
-class ToolExecutor {
+export class ToolExecutor {
   private client: SupabaseClient;
   private recurrenceEngine: RecurrenceEngine;
 
@@ -924,6 +945,8 @@ class ToolExecutor {
           return await this.createTask(args);
         case "create_recurring_task":
           return await this.createRecurringTask(args);
+        case "append_task_note":
+          return JSON.stringify(await appendTaskNote(this.client, args));
         case "update_task":
           return await this.updateTask(args);
         case "complete_task":
@@ -2468,7 +2491,8 @@ async function main() {
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const result = await executor.execute(request.params.name, (request.params.arguments || {}) as Record<string, unknown>);
-    return { content: [{ type: "text", text: result }] };
+    return { content: [{ type: "text", text: result }],
+      ...(request.params.name === "append_task_note" && JSON.parse(result).error ? { isError: true } : {}) };
   });
 
   const transport = new StdioServerTransport();
@@ -2477,4 +2501,6 @@ async function main() {
   console.error("Streamline MCP server running (v1.1.0 with recurrence support)");
 }
 
-main().catch(console.error);
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
+  main().catch(console.error);
+}
