@@ -63,7 +63,8 @@ The tools will now be available.
 | `read_task` | Get full details by UUID (includes recurrence info) |
 | `create_task` | Create a new one-time task |
 | `create_recurring_task` | Create a recurring task with a schedule |
-| `update_task` | Update name, notes, due date, urgency |
+| `update_task` | Update name, due date, urgency; intentionally replace notes |
+| `append_task_note` | Atomically append task notes with retry deduplication (database migration required) |
 | `complete_task` | Mark completed (auto-creates next occurrence for recurring) |
 | `skip_recurring_task` | Skip an occurrence without completing |
 | `pause_recurring_series` | Pause a recurring series |
@@ -110,6 +111,25 @@ search_tasks(due_before: "today", include_completed: false)
 # Complete a task
 complete_task(uuid: "550e8400-e29b-41d4-a716-446655440000")
 ```
+
+### Append a task-note contribution
+
+```text
+append_task_note(
+  uuid: "550e8400-e29b-41d4-a716-446655440000",
+  content: "Follow-up: reviewed the draft.",
+  request_id: "d797f1b5-a051-48a5-813b-eed7c0d40ec2"
+)
+```
+
+Generate a fresh request UUID for each contribution, then reuse it with identical
+content for every retry, including after a timeout. The append is transactional;
+existing notes are preserved and concurrent appends are serialized. A later
+intentional rewrite can still replace notes. `update_task(notes)` keeps its
+full-replacement behavior.
+
+Requires an explicitly approved SQL migration before deployment. See
+[deployment, permissions, limits, and rollback](docs/append-task-note-deployment.md).
 
 ### Recurring Tasks
 
@@ -229,6 +249,7 @@ SUPABASE_USER_ID=your_user_uuid
 npm install
 npm run build
 npm start
+npm test # isolated local PostgreSQL + MCP tests; no production database
 ```
 
 ## Changelog
