@@ -31,7 +31,8 @@ test('append updates content timestamp and previews, including for an empty note
     const {body} = writes[0];
     assert.equal(body.content, existing + '\n\nAdded paragraph');
     assert.equal(body.last_edited_at, body.updated_at);
-    assert.equal(body.second_line_clean, 'Added paragraph');
+    assert.equal(body.first_line_clean, existing || 'Added paragraph');
+    assert.equal(body.second_line_clean, existing ? 'Added paragraph' : '');
     assert.equal(body.word_count, existing ? 3 : 2);
     assert.equal(body.character_count, [...body.content].length);
   }
@@ -61,4 +62,20 @@ test('creating a note supplies a content timestamp explicitly', async () => {
   assert.equal(body.last_edited_at, body.created_at);
   assert.equal(body.last_edited_at, body.updated_at);
   assert.equal(body.character_count, 12);
+});
+
+const markdown = '\n---\n# **Lesson**\n## [Subtitle](https://example.com)\n- [x] `Done`\n> ==More==';
+for (const operation of ['create_note', 'update_note']) {
+  test(`${operation} stores readable markdown previews`, async () => {
+    const {executor, writes} = fixture();
+    await executor.execute(operation, {uuid, content: markdown});
+    assert.equal(writes[0].body.first_line_clean, 'Lesson');
+    assert.equal(writes[0].body.second_line_clean, 'Subtitle Done More');
+  });
+}
+test('append rebuilds markdown previews from the complete body', async () => {
+  const {executor, writes} = fixture('# **Lesson**');
+  await executor.execute('update_note', {uuid, append: '## _Subtitle_'});
+  assert.equal(writes[0].body.first_line_clean, 'Lesson');
+  assert.equal(writes[0].body.second_line_clean, 'Subtitle');
 });

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import {notePreview} from "./note-preview.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -1819,9 +1820,7 @@ export class ToolExecutor {
     const uuid = crypto.randomUUID();
     const now = new Date().toISOString();
 
-    const lines = content.split("\n");
-    const firstLine = lines[0]?.trim() || "Untitled";
-    const secondLine = lines.slice(1).find((l) => l.trim())?.trim() || null;
+    const {first: firstLine, second: secondLine} = notePreview(content);
     const wordCount = content.split(/\s+/).filter(Boolean).length;
 
     await this.client.insert("notes", {
@@ -1877,10 +1876,10 @@ export class ToolExecutor {
     }
 
     if (args.content !== undefined || args.append !== undefined) {
-      const lines = content.split("\n");
+      const preview = notePreview(content);
       updates.content = content;
-      updates.first_line_clean = lines[0]?.trim() || "Untitled";
-      updates.second_line_clean = lines.slice(1).find((l) => l.trim())?.trim() || null;
+      updates.first_line_clean = preview.first;
+      updates.second_line_clean = preview.second;
       updates.word_count = content.split(/\s+/).filter(Boolean).length;
       updates.character_count = [...content].length;
       // The app uses last_edited_at to merge content and updated_at for metadata.
