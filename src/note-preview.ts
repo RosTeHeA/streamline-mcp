@@ -42,7 +42,7 @@ export function notePreview(content: string): {first: string; second: string} {
   }).map(clean);
   return {
     first: lines[0] ?? "",
-    second: [lines[1] ?? "", [...lines.slice(2).join(" ")].slice(0, 200).join("")]
+    second: [lines[1] ?? "", [...lines.slice(2).filter(Boolean).join(" ")].slice(0, 200).join("")]
       .filter(Boolean).join(" "),
   };
 }
