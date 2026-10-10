@@ -11,20 +11,14 @@
     "type": "git",
     "url": "git+https://github.com/RosTeHeA/streamline-mcp.git"
   },
-  "files": [
-    "dist/",
-    "README.md",
-    "CHANGELOG.md",
-    "docs/",
-    "migrations/"
-  ],
   "scripts": {
     "build": "tsc",
     "prepare": "npm run build",
     "start": "node dist/index.js",
     "dev": "tsc --watch",
     "test": "npm run build && node --test tests/*.test.mjs",
-    "test:package": "node scripts/verify-package.mjs"
+    "test:install": "node scripts/verify-install.mjs",
+    "update": "git pull --ff-only origin main && npm ci"
   },
   "keywords": [
     "mcp",

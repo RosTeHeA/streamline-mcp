@@ -2,11 +2,24 @@
 
 MCP server that gives AI assistants access to your Streamline tasks, notes, tags, and workspaces.
 
-**Current release: v1.1.1.** See [update and restart instructions](docs/updating.md) and the [changelog](CHANGELOG.md). This server is installed from this GitHub repository; the npm registry package named `streamline-mcp` belongs to a different project.
+Use one local Git checkout per machine and point your MCP clients at it. GitHub `main` is the source of updates; no npm publishing, release archives, or per-agent clones are needed. The npm registry package named `streamline-mcp` belongs to a different project.
 
 ## Setup
 
-### 1. Configure credentials
+### 1. Clone and build
+
+Install Node.js 18 or later and Git, then run:
+
+```sh
+mkdir -p "$HOME/.local/share"
+git clone https://github.com/RosTeHeA/streamline-mcp.git "$HOME/.local/share/streamline-mcp"
+cd "$HOME/.local/share/streamline-mcp"
+npm ci
+```
+
+`npm ci` installs the locked dependencies and builds automatically. If you already have a checkout, keep using its existing path instead of creating another.
+
+### 2. Configure credentials
 
 Create `~/.config/streamline-mcp/config.json`:
 
@@ -18,43 +31,40 @@ Create `~/.config/streamline-mcp/config.json`:
 }
 ```
 
-**Where to get these:**
-- `apiKey`: Supabase Dashboard → Settings → API → `service_role` key
-- `userID`: Supabase Dashboard → Authentication → Users → Your user ID
+Use your existing Supabase project URL, service role key, and user ID. Keep this file outside the repository and out of chat/diagnostic output.
 
-### 2. Add to Claude Code
+### 3. Connect your MCP clients
 
-Edit `~/.claude.json`:
+Use `node` with the absolute path to this checkout's `dist/index.js`. From the checkout, print that path with `node -p 'process.cwd() + "/dist/index.js"'` and put it in each client's configuration. Do not use `~` in the argument; clients do not necessarily expand it.
 
-```json
-{
-  "mcpServers": {
-    "streamline": {
-      "command": "npx",
-      "args": ["-y", "github:RosTeHeA/streamline-mcp#v1.1.1"]
-    }
-  }
-}
-```
-
-Git installations build automatically. Node.js 18 or later and Git are required. A [prebuilt release download](docs/updating.md#prebuilt-release-download) is also available.
-
-Or clone the repository, run `npm ci` to install and build, and run locally:
+For example, in Claude Code's `~/.claude.json`:
 
 ```json
 {
   "mcpServers": {
     "streamline": {
       "command": "node",
-      "args": ["/path/to/streamline-mcp/dist/index.js"]
+      "args": ["/absolute/path/to/streamline-mcp/dist/index.js"]
     }
   }
 }
 ```
 
-### 3. Restart Claude Code
+If a desktop client cannot find `node`, use its absolute path from `command -v node`. All clients on one machine can use the same checkout; each starts its own MCP process.
 
-The tools will now be available.
+### 4. Restart/reconnect the MCP client
+
+The tools will now be available. On another machine, repeat this setup using your own credentials configuration.
+
+## Update
+
+From your checkout on `main`, run:
+
+```sh
+npm run update
+```
+
+This runs `git pull --ff-only origin main` and `npm ci`, including the build. Restart/reconnect the clients afterward. Their configured path stays unchanged. See [update and recovery details](docs/updating.md) and the [changelog](CHANGELOG.md).
 
 ---
 

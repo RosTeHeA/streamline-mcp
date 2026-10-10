@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Standardize on one local Git checkout per machine, shared by MCP clients.
+- Add `npm run update` to pull `main`, install locked dependencies, and rebuild.
+- Replace the archive distribution workflow with a clean-clone and update test. Existing version tags remain source checkpoints; routine updates need no release publication.
+
 ## 1.1.1 — 2026-10-10
 
 - Fix MCP note edits that were visible to agents but stayed empty or stale in Streamline. Creating, replacing, appending, or clearing content now supplies the content-edit timestamp used by the app; metadata-only updates preserve it.
