@@ -13,6 +13,10 @@ import { join } from "path";
 import { pathToFileURL } from "url";
 import { appendTaskNote, appendTaskNoteTool } from "./append-task-note.js";
 
+const serverVersion: string = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf-8")
+).version;
+
 // ============================================================================
 // Configuration
 // ============================================================================
@@ -2489,7 +2493,7 @@ async function main() {
   const client = new SupabaseClient(config);
   const executor = new ToolExecutor(client);
 
-  const server = new Server({ name: "streamline-mcp", version: "1.1.0" }, { capabilities: { tools: {} } });
+  const server = new Server({ name: "streamline-mcp", version: serverVersion }, { capabilities: { tools: {} } });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
 
@@ -2502,7 +2506,7 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  console.error("Streamline MCP server running (v1.1.0 with recurrence support)");
+  console.error(`Streamline MCP server running (v${serverVersion})`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {

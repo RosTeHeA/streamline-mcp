@@ -1,17 +1,30 @@
 {
   "name": "streamline-mcp",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "description": "MCP server for Streamline - access your tasks, notes, tags, and workspaces",
   "main": "dist/index.js",
   "bin": {
     "streamline-mcp": "dist/index.js"
   },
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RosTeHeA/streamline-mcp.git"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "CHANGELOG.md",
+    "docs/",
+    "migrations/"
+  ],
   "scripts": {
     "build": "tsc",
+    "prepare": "npm run build",
     "start": "node dist/index.js",
     "dev": "tsc --watch",
-    "test": "npm run build && node --test tests/*.test.mjs"
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "test:package": "node scripts/verify-package.mjs"
   },
   "keywords": [
     "mcp",

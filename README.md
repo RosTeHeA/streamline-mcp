@@ -2,6 +2,8 @@
 
 MCP server that gives AI assistants access to your Streamline tasks, notes, tags, and workspaces.
 
+**Current release: v1.1.1.** See [update and restart instructions](docs/updating.md) and the [changelog](CHANGELOG.md). This server is installed from this GitHub repository; the npm registry package named `streamline-mcp` belongs to a different project.
+
 ## Setup
 
 ### 1. Configure credentials
@@ -29,13 +31,15 @@ Edit `~/.claude.json`:
   "mcpServers": {
     "streamline": {
       "command": "npx",
-      "args": ["github:YOUR_USERNAME/streamline-mcp"]
+      "args": ["-y", "github:RosTeHeA/streamline-mcp#v1.1.1"]
     }
   }
 }
 ```
 
-Or run locally:
+Git installations build automatically. Node.js 18 or later and Git are required. A [prebuilt release download](docs/updating.md#prebuilt-release-download) is also available.
+
+Or clone the repository, run `npm ci` to install and build, and run locally:
 
 ```json
 {

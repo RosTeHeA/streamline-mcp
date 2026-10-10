@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
-import {mkdtemp,writeFile,symlink,rm} from 'node:fs/promises';
+import {mkdtemp,writeFile,readFile,symlink,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -26,6 +26,8 @@ test('symlink CLI initializes and lists/calls append tool over MCP with syntheti
   const transport=new StdioClientTransport({command:process.execPath,args:[bin],cwd:folder,env:{PATH:process.env.PATH,SUPABASE_CONFIG_PATH:config},stderr:'pipe'});
   try{
     await client.connect(transport);
+    const manifest=JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8'));
+    assert.equal(client.getServerVersion()?.version,manifest.version);
     const listed=await client.listTools();assert.ok(listed.tools.some(t=>t.name==='append_task_note'));
     const args={uuid:'11111111-1111-1111-1111-111111111111',request_id:'22222222-2222-2222-2222-222222222222',content:'new contribution'};
     const reply=await client.callTool({name:'append_task_note',arguments:args});
