@@ -1828,9 +1828,11 @@ export class ToolExecutor {
       second_line_clean: secondLine,
       created_at: now,
       updated_at: now,
+      last_edited_at: now,
       is_flagged: false,
       in_archive: false,
       word_count: wordCount,
+      character_count: [...content].length,
       is_deleted: false,
     });
 
@@ -1862,22 +1864,24 @@ export class ToolExecutor {
 
     if (notes.length === 0) return `Note not found with UUID: ${uuid}`;
 
-    const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    const now = new Date().toISOString();
+    const updates: Record<string, unknown> = { updated_at: now };
+    const existing = (notes[0].content as string) || "";
+    let content = args.content !== undefined ? args.content as string : existing;
+    if (args.append !== undefined) {
+      content += "\n\n" + (args.append as string);
+    }
 
-    if (args.content !== undefined) {
-      const content = args.content as string;
+    if (args.content !== undefined || args.append !== undefined) {
       const lines = content.split("\n");
       updates.content = content;
       updates.first_line_clean = lines[0]?.trim() || "Untitled";
       updates.second_line_clean = lines.slice(1).find((l) => l.trim())?.trim() || null;
       updates.word_count = content.split(/\s+/).filter(Boolean).length;
-    }
-
-    if (args.append !== undefined) {
-      const existing = (notes[0].content as string) || "";
-      const newContent = existing + "\n\n" + (args.append as string);
-      updates.content = newContent;
-      updates.word_count = newContent.split(/\s+/).filter(Boolean).length;
+      updates.character_count = [...content].length;
+      // The app uses last_edited_at to merge content and updated_at for metadata.
+      // Advancing only the row revision leaves an already-open note unchanged.
+      if (content !== existing) updates.last_edited_at = now;
     }
 
     if (args.is_flagged !== undefined) updates.is_flagged = args.is_flagged;
