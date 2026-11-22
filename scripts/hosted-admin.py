@@ -72,6 +72,7 @@ def apply_schema():
     print('Applied hosted migration transactionally; connector remains disabled.')
 
 def configure_auth():
+    raise RuntimeError("Hosted sign-in is withdrawn pending migration off GitHub Pages. Do not re-enable this configuration.")
     if not STATE.get('migration_sha256'):
         raise RuntimeError('Apply and verify database restrictions before enabling OAuth.')
     health = request(PROJECT_URL + '/auth/v1/health', admin=True)
@@ -148,6 +149,7 @@ try:
         sql('UPDATE streamline_mcp_private.settings SET enabled=false,writes_enabled=false', False)
         print('All hosted data access revoked immediately; native/local clients unaffected.')
     elif args.action == 'enable-writes':
+        if STATE.get('consent_hosting_paused'): raise RuntimeError('Migrate and verify consent hosting before enabling writes.')
         if not args.connection_verified: raise RuntimeError('Verify the owner-authorized Claude connection before enabling writes.')
         request(MANAGEMENT + '/secrets', 'POST', [{'name':'MCP_WRITES_ENABLED','value':'true'}])
         sql('UPDATE streamline_mcp_private.settings SET writes_enabled=true WHERE enabled', False)

@@ -1,5 +1,14 @@
 # Hosted personal Streamline connector
 
+> Rollout withdrawn on 2026-11-22: hosted access and OAuth are disabled, and
+> GitHub Pages has been unpublished. GitHub advises against using Pages for
+> sensitive transactions such as passwords. The consent UI must move to an
+> appropriate, isolated HTTPS origin before reconnection. The setup command is
+> intentionally blocked until that migration is implemented and verified.
+> The instructions below describe the prior deployment, not a ready-to-use service.
+> Native app and local stdio access remain available.
+
+
 The hosted transport is a Supabase Edge Function, independent of a Mac or running
 Streamline app. Local stdio installations remain available. The hosted version has
 a deliberately smaller tool set and never loads the local privileged config.
