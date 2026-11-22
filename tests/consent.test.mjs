@@ -45,3 +45,13 @@ test('email-link token is removed from URL history and never persisted',async()=
  assert.ok(!f.replaced.includes('token'));assert.equal(f.element('consent').hidden,false);assert.equal(f.storage.size,0);
  assert.ok(f.requests.some(r=>r.url.endsWith('/user')&&r.options.headers.Authorization==='Bearer synthetic-access-token'));
 });
+
+test('consent CSP permits its configuration fetch and only the authentication origin',async()=>{
+ const html=await readFile(new URL('../docs/consent.html',import.meta.url),'utf8');
+ const config=JSON.parse(await readFile(new URL('../docs/consent-config.json',import.meta.url),'utf8'));
+ const policy=html.match(/http-equiv="Content-Security-Policy" content="([^"]+)"/)[1];
+ const directives=new Map(policy.split(';').map(part=>{const [name,...sources]=part.trim().split(/\s+/);return [name,sources];}));
+ assert.deepEqual(directives.get('connect-src'),["'self'",new URL(config.projectURL).origin]);
+ assert.deepEqual(directives.get('default-src'),["'none'"]);
+ assert.deepEqual(directives.get('script-src'),["'self'"]);
+});
