@@ -32,6 +32,10 @@ This is the personal Streamline note/task MCP server at `RosTeHeA/streamline-mcp
 - Keep the hosted transport independent of local config and privileged keys.
 - Preserve owner/client checks, direct-access restrictions, private-note exclusion,
   write gates, transactional retry deduplication and native sync metadata.
-- `docs/consent-config.json` intentionally contains only public OAuth configuration.
+- `consent/consent-config.json` intentionally contains only public OAuth configuration.
 - Deployment checkpoints and prior auth settings stay outside Git. Never run
   production setup scripts as part of tests or include real note/task contents.
+
+- Sign-in is hosted on the dedicated Netlify origin using only `consent/`. Never
+  publish it on GitHub Pages. Preserve HTTP security headers, production-origin
+  checks, explicit consent, and PKCE for email sign-in. No auth tokens in storage.

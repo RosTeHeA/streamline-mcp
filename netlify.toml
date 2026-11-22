@@ -1,0 +1,5 @@
+[build]
+  publish = "consent"
+
+[build.processing]
+  skip_processing = true

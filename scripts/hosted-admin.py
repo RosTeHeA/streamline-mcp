@@ -21,8 +21,8 @@ CONFIG = json.loads((CONFIG_DIR / 'config.json').read_text())
 PROJECT_URL = CONFIG['projectURL'].rstrip('/')
 REF = PROJECT_URL.split('//')[1].split('.')[0]
 MANAGEMENT = f'https://api.supabase.com/v1/projects/{REF}'
-CONSENT_ORIGIN = 'https://rostehea.github.io'
-CONSENT_PATH = '/streamline-mcp/consent.html'
+CONSENT_ORIGIN = 'https://streamline-personal-auth.netlify.app'
+CONSENT_PATH = '/consent.html'
 STATE = json.loads(STATE_PATH.read_text()) if STATE_PATH.exists() else {}
 
 def save():
@@ -71,8 +71,24 @@ def apply_schema():
     save()
     print('Applied hosted migration transactionally; connector remains disabled.')
 
+def verify_consent_host():
+    # Fail closed if hosting headers or assets differ from this reviewed checkout.
+    for name in ['consent.html', 'consent.js', 'consent.css', 'consent-config.json']:
+        with urllib.request.urlopen(CONSENT_ORIGIN + '/' + name, timeout=30) as response:
+            if response.geturl() != CONSENT_ORIGIN + '/' + name:
+                raise RuntimeError('Unexpected consent hosting redirect.')
+            if response.read() != (ROOT / 'consent' / name).read_bytes():
+                raise RuntimeError('Deploy the reviewed consent assets before configuring OAuth.')
+            expected = {'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff',
+                'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store'}
+            if any(response.headers.get(k) != v for k, v in expected.items()):
+                raise RuntimeError('Consent host is missing required security headers.')
+            csp = response.headers.get('Content-Security-Policy', '')
+            if "frame-ancestors 'none'" not in csp or "default-src 'none'" not in csp:
+                raise RuntimeError('Consent host is missing its enforced CSP.')
+
 def configure_auth():
-    raise RuntimeError("Hosted sign-in is withdrawn pending migration off GitHub Pages. Do not re-enable this configuration.")
+    verify_consent_host()
     if not STATE.get('migration_sha256'):
         raise RuntimeError('Apply and verify database restrictions before enabling OAuth.')
     health = request(PROJECT_URL + '/auth/v1/health', admin=True)
@@ -83,7 +99,7 @@ def configure_auth():
     changes = {'oauth_server_enabled': True, 'oauth_server_allow_dynamic_registration': False,
         'oauth_server_authorization_path': CONSENT_PATH, 'site_url': CONSENT_ORIGIN,
         'disable_signup': True}
-    allow = set(filter(None, auth.get('uri_allow_list', '').split(',')))
+    allow = {url for url in auth.get('uri_allow_list', '').split(',') if url and not url.startswith('https://rostehea.github.io')}
     allow.update([CONSENT_ORIGIN, CONSENT_ORIGIN + CONSENT_PATH, 'streamline://auth/callback'])
     changes['uri_allow_list'] = ','.join(sorted(allow))
     if 'auth_before' not in STATE:
@@ -110,10 +126,10 @@ def configure_auth():
         publishable = next((k['api_key'] for k in keys if k.get('name') == 'anon'), None)
     if not publishable or publishable.startswith('sb_secret_'):
         raise RuntimeError('A publishable/anon key is required.')
-    # These three values are public OAuth configuration, never service credentials.
-    (ROOT / 'docs/consent-config.json').write_text(json.dumps({
+    # These values are public OAuth configuration, never service credentials.
+    (ROOT / 'consent/consent-config.json').write_text(json.dumps({
         'projectURL': PROJECT_URL, 'publishableKey': publishable,
-        'clientID': STATE['client_id']}, indent=2) + '\n')
+        'clientID': STATE['client_id'], 'consentOrigin': CONSENT_ORIGIN}, indent=2) + '\n')
     request(MANAGEMENT + '/secrets', 'POST', [
         {'name': 'MCP_PUBLISHABLE_KEY', 'value': publishable},
         {'name': 'MCP_OWNER_ID', 'value': CONFIG['userID']},
@@ -125,6 +141,7 @@ def configure_auth():
         + ',true,false) ON CONFLICT(singleton) DO UPDATE SET owner_id=excluded.owner_id,client_id=excluded.client_id,enabled=true,writes_enabled=false', False)
     STATE['resource_url'] = PROJECT_URL + '/functions/v1/streamline-mcp'
     STATE['consent_url'] = CONSENT_ORIGIN + CONSENT_PATH
+    STATE['consent_hosting_paused'] = False
     save()
     print('Configured owner-only OAuth, disabled public signup and dynamic registration, preserved native callback, and set read-only gates.')
     print('Public OAuth client ID:', STATE['client_id'])

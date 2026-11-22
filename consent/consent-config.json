@@ -1,5 +1,6 @@
 {
   "projectURL": "https://jrgsnuobnulpadoivgyj.supabase.co",
   "publishableKey": "sb_publishable_f6yeG0yLe5r7K1_mjf3KcQ_FqZXIjJ2",
-  "clientID": "e7e6075c-fdf8-4c02-abd0-8be5f217cf09"
+  "clientID": "e7e6075c-fdf8-4c02-abd0-8be5f217cf09",
+  "consentOrigin": "https://streamline-personal-auth.netlify.app"
 }

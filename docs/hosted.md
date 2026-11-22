@@ -1,14 +1,5 @@
 # Hosted personal Streamline connector
 
-> Rollout withdrawn on 2026-11-22: hosted access and OAuth are disabled, and
-> GitHub Pages has been unpublished. GitHub advises against using Pages for
-> sensitive transactions such as passwords. The consent UI must move to an
-> appropriate, isolated HTTPS origin before reconnection. The setup command is
-> intentionally blocked until that migration is implemented and verified.
-> The instructions below describe the prior deployment, not a ready-to-use service.
-> Native app and local stdio access remain available.
-
-
 The hosted transport is a Supabase Edge Function, independent of a Mac or running
 Streamline app. Local stdio installations remain available. The hosted version has
 a deliberately smaller tool set and never loads the local privileged config.
@@ -20,12 +11,25 @@ In Claude's custom connectors, add:
 `https://jrgsnuobnulpadoivgyj.supabase.co/functions/v1/streamline-mcp`
 
 Choose OAuth sign-in and **Use your own OAuth client**. Use the public client ID
-from `docs/consent-config.json`; leave client secret empty. This is a public OAuth
+from `consent/consent-config.json`; leave client secret empty. This is a public OAuth
 client using authorization code + PKCE, with only
 `https://claude.ai/api/mcp/auth_callback` registered. Dynamic registration is off.
 Sign in on the consent page using the existing Streamline account. Password and
-email-link authentication go directly to Supabase; this page never stores tokens
-in browser storage, includes third-party scripts, or sends analytics.
+email-link authentication go directly to Supabase; the page never persists access/refresh tokens, includes third-party scripts, or sends analytics.
+The dedicated sign-in origin is `https://streamline-personal-auth.netlify.app`.
+Email sign-in uses S256 PKCE: a random proof is kept in browser storage for the
+pending request, accepted for at most 10 minutes, and removed when exchanged.
+Open the email link in the same browser. Preview deployments cannot sign in.
+
+GitHub stores source code only. GitHub Pages is unpublished and is not an allowed
+authentication redirect. Netlify serves only the `consent/` static assets, with
+HTTP CSP, `frame-ancestors 'none'`, no-referrer, no-store, HSTS, nosniff and
+restricted browser permissions. Sign-in requests go directly to Supabase. No
+Netlify functions, database, form collection, analytics or automatic Git builds
+are configured. Hosting providers can still keep ordinary request/access logs;
+the email callback carries a single-use PKCE code, never access/refresh tokens.
+The hosting account and its deployment credentials are trusted to serve the
+reviewed code. Secure those accounts and review deployments accordingly.
 
 The initial deployment is read-only. Verify search/read in Claude and Duet, then
 enable writes with the explicit admin command below. Claude may require a
@@ -98,6 +102,7 @@ npm test
 npm run test:install
 deno test --allow-net --allow-env --allow-read --config supabase/functions/streamline-mcp/deno.json supabase/functions/streamline-mcp/handler_test.ts
 python3 scripts/hosted-admin.py apply-schema
+netlify deploy --site 52e1dd8e-f973-4d84-878a-a93f51d08116 --dir consent --no-build --prod
 python3 scripts/hosted-admin.py configure-auth
 npx supabase functions deploy streamline-mcp --remote=jrgsnuobnulpadoivgyj --use-api --no-verify-jwt --yes
 python3 scripts/hosted-admin.py status
@@ -105,8 +110,12 @@ python3 scripts/hosted-admin.py status
 
 `--no-verify-jwt` is intentional: the legacy gateway cannot authenticate the OAuth
 discovery request. The function performs its own strict JWT verification before
-processing any MCP message. Publish `docs/` with GitHub Pages on this repository's
-main branch; `consent-config.json` contains only public configuration.
+processing any MCP message. Deploy only `consent/` to the dedicated Netlify site;
+`consent-config.json` contains only public configuration. Before configuring
+OAuth, the admin script checks deployed asset bytes and required HTTP headers
+against the reviewed checkout. Never republish the sign-in page on GitHub Pages.
+Supabase's OAuth server is currently beta. Keep the dependency version check and
+revalidate after provider/authentication changes.
 
 After a successful owner-authorized connection test:
 
