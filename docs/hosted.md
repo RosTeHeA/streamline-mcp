@@ -54,8 +54,9 @@ Supabase; unsynced offline edits remain on the device until normal sync runs.
   narrowly scoped MCP RPC derives ownership from the verified identity, checks
   owner/client settings on every call, and exposes only explicitly coded queries.
 - Private notes, deleted/trashed records, attachments, note history, chat data,
-  reflection data, locations, arbitrary SQL, deletion and recurring-task writes
-  are not exposed. Workspace names are available; workspace rules are not an
+  reflection data, locations, arbitrary SQL, deletion and completing recurring occurrences
+  are not exposed. Tasks derived from private notes are excluded, including
+  legacy occurrences whose source link exists only on their template. Workspace names are available; workspace rules are not an
   authorization boundary. Tasks/notes can be filtered by tag IDs.
 - Revocation and write controls are enforced in the database, including for an
   OAuth holder bypassing the Edge Function. Unauthenticated discovery reveals
@@ -65,6 +66,29 @@ Supabase; unsynced offline edits remain on the device until normal sync runs.
 - Setup requires Supabase Auth v2.198.0 or later, which blocks OAuth client tokens
   from changing account credentials or enrolling MFA. The deployed Auth version
   was verified before completing this rollout.
+
+## Repeating tasks
+
+Create a task with `create_task`, read its current revision, then use
+`set_task_recurrence` with a rule and `first_due_date` (YYYY-MM-DD). This creates
+the template and its first occurrence in one transaction using Streamline's
+native deterministic occurrence identity and noon-UTC due-date format.
+Daily, weekly (selected weekdays), monthly (day or ordinal weekday), yearly,
+completion-based anchors and end conditions are supported. Generation counters
+are preserved and cannot be set by the caller.
+
+Use `search_tasks(include_templates: true)` or an occurrence's
+`recurrence_parent_id` to find its template. Read that template before changing
+its rule or status (`active`, `paused`, `ended`). Existing open occurrences and
+completed history are preserved. Change an individual occurrence's fields with
+`update_task`; template field edits apply to future occurrences. Current template
+due dates cannot be moved through `update_task`. Tasks with reminders must retain
+the existing due day when first converted, preserving reminder semantics.
+
+Streamline's native engine generates later occurrences when the app evaluates
+the series on launch/foreground or after task bootstrap/completion. The hosted
+service does not run a second scheduler. Completing repeating occurrences stays
+in the native app so occurrence counters and generation remain consistent.
 
 ## Data integrity
 
@@ -102,6 +126,7 @@ npm test
 npm run test:install
 deno test --allow-net --allow-env --allow-read --config supabase/functions/streamline-mcp/deno.json supabase/functions/streamline-mcp/handler_test.ts
 python3 scripts/hosted-admin.py apply-schema
+python3 scripts/hosted-admin.py apply-recurrence
 netlify deploy --site 52e1dd8e-f973-4d84-878a-a93f51d08116 --dir consent --no-build --prod
 python3 scripts/hosted-admin.py configure-auth
 npx supabase functions deploy streamline-mcp --remote=jrgsnuobnulpadoivgyj --use-api --no-verify-jwt --yes

@@ -71,6 +71,20 @@ def apply_schema():
     save()
     print('Applied hosted migration transactionally; connector remains disabled.')
 
+def apply_recurrence():
+    path = ROOT / 'migrations/202611220002_hosted_recurrence.sql'
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if STATE.get('recurrence_migration_sha256'):
+        if STATE['recurrence_migration_sha256'] != digest:
+            raise RuntimeError('Applied recurrence migration changed. Review before proceeding.')
+        print('Recurrence migration already applied and checkpoint matches.')
+        return
+    # The transaction checks the old function body before replacing it.
+    sql(path.read_text(), False)
+    STATE['recurrence_migration_sha256'] = digest
+    save()
+    print('Applied guarded recurrence support and private-source task exclusion.')
+
 def verify_consent_host():
     # Fail closed if hosting headers or assets differ from this reviewed checkout.
     for name in ['consent.html', 'consent.js', 'consent.css', 'consent-config.json']:
@@ -155,11 +169,12 @@ def status():
     print('Recent tool metadata:', sql('SELECT tool,succeeded,count(*) FROM streamline_mcp_private.audit GROUP BY tool,succeeded ORDER BY tool'))
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('action', choices=['apply-schema', 'configure-auth', 'status', 'disable', 'enable-writes'])
+parser.add_argument('action', choices=['apply-schema', 'apply-recurrence', 'configure-auth', 'status', 'disable', 'enable-writes'])
 parser.add_argument('--connection-verified', action='store_true', help='Required after a successful owner-authorized Claude connection test.')
 args = parser.parse_args()
 try:
     if args.action == 'apply-schema': apply_schema()
+    elif args.action == 'apply-recurrence': apply_recurrence()
     elif args.action == 'configure-auth': configure_auth()
     elif args.action == 'status': status()
     elif args.action == 'disable':

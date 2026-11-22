@@ -61,3 +61,15 @@ Deno.test("real JWT verification rejects expiry, wrong audience/issuer and bad s
     for(const jwt of [await token({exp:1}),await token({aud:"other"}),await token({iss:"https://wrong.invalid"}),await token({},(await generateKeyPair("ES256")).privateKey)])assertEquals((await handler(request(undefined,jwt))).status,401);
   }finally{controller.abort();await server.finished;}
 });
+Deno.test("writes expose guarded recurrence tools and reject malformed rule input before RPC",async()=>{
+  const seen:{tool:string;args:unknown}[]=[];
+  const handler=createHandler({...cfg,writesEnabled:true},{verify:async()=>claims,rpc:async(_,tool,args)=>{seen.push({tool,args});return tool==='__authorize'?authResult:{success:true};},audit:()=>{}});
+  const response=await handler(request());const tools=(await response.json()).result.tools;
+  assertEquals(tools.length,15);assert(tools.some((t:{name:string})=>t.name==='set_task_recurrence'));
+  const base={uuid:owner,request_id:owner,expected_updated_at:'2026-11-22T12:00:00Z',first_due_date:'2026-11-23'};
+  for(const rule of [{frequency:'hourly'},{frequency:'weekly',weekdays:[9]},{frequency:'daily',occurrencesGenerated:0}]){
+    const result=await handler(request({jsonrpc:'2.0',id:2,method:'tools/call',params:{name:'set_task_recurrence',arguments:{...base,rule}}}));assert((await result.json()).result.isError);
+  }
+  assert(!seen.some(r=>r.tool==='set_task_recurrence'));
+  const valid=await handler(request({jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'set_task_recurrence',arguments:{...base,rule:{frequency:'daily'}}}}));assert(!(await valid.json()).result.isError);assert(seen.some(r=>r.tool==='set_task_recurrence'));
+});

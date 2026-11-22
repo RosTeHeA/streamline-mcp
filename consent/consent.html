@@ -10,7 +10,7 @@
 <button type="submit">Sign in</button><button id="magic" type="button" class="secondary">Email me a sign-in link</button>
 <p class="small">Use your existing Streamline account. This page does not create new accounts. Your password is sent directly to Streamline’s Supabase authentication service.</p></form>
 <section id="consent" hidden><h2>Claude · Streamline</h2><p>You are connecting your personal Streamline account to Claude.</p>
-<ul><li>Read tasks, nonprivate notes, tags and workspace names.</li><li>When write access is enabled: create and edit one-time tasks and notes, append text, and complete one-time tasks.</li><li>Private notes, attachments, permanent deletion and recurring-task changes stay unavailable.</li></ul>
+<ul><li>Read tasks, nonprivate notes, tags and workspace names. Tasks linked to private notes are excluded.</li><li>When write access is enabled: create and edit tasks and notes, append text, complete one-time tasks, and configure, edit or pause repeating task series.</li><li>Private notes, attachments, permanent deletion and completing repeating occurrences stay unavailable. Existing occurrences and history are preserved when a repeat schedule changes.</li></ul>
 <p>Access starts read-only. Write operations require a separate server-side switch after connection testing. You can revoke this connection at any time.</p>
 <button id="approve" type="button">Allow this connection</button><button id="deny" type="button" class="secondary">Cancel</button></section>
 <p class="footer">Access tokens stay in memory. Email sign-in uses a temporary browser proof that expires after 10 minutes. No analytics or third-party scripts.</p></main></body></html>

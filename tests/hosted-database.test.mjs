@@ -37,6 +37,7 @@ END;$f$;
  GRANT USAGE ON SCHEMA storage TO authenticated;GRANT SELECT ON storage.objects TO authenticated;
  CREATE POLICY native_access ON storage.objects FOR ALL TO authenticated USING(true);`);
  await admin.query(await readFile(new URL('../migrations/202611220001_hosted_mcp.sql',import.meta.url),'utf8'));
+ await admin.query(await readFile(new URL('../migrations/202611220002_hosted_recurrence.sql',import.meta.url),'utf8'));
  await admin.query('INSERT INTO auth.users VALUES($1),($2)',[owner,other]);
  await admin.query('INSERT INTO streamline_mcp_private.settings(owner_id,client_id,enabled,writes_enabled) VALUES($1,$2,true,true)',[owner,client]);
 });
@@ -94,14 +95,14 @@ test('concurrent duplicate retries commit once, different appends all survive, c
  assert.equal((await admin.query('SELECT content FROM notes WHERE id=$1',[id])).rows[0].content.split('\n\n').length,10);
  assert.ok((await call(cs[0],'append_note',{...args,content:'changed'})).error);
 });
-test('task revisions reject stale writes and advance beyond older transactions; recurring writes rejected',async()=>{
+test('task revisions reject stale writes and advance beyond older transactions; recurring edits allowed while recurring completion stays native',async()=>{
  const c=await session(),id=await task();const old=(await call(c,'read_task',{uuid:id}))[0];assert.ok(old);
  let r=await call(c,'append_task_note',{uuid:id,request_id:randomUUID(),content:'added'});assert.equal(r.success,true,JSON.stringify(r));
  r=await call(c,'update_task',{uuid:id,request_id:randomUUID(),expected_updated_at:old.updated_at,notes:'stale'});assert.match(r.error,/Conflict/);
  const native=await session(owner,null);await native.query('BEGIN');const before=(await admin.query('SELECT updated_at FROM tasks WHERE id=$1',[id])).rows[0].updated_at;
  await call(c,'append_task_note',{uuid:id,request_id:randomUUID(),content:'second'});await native.query('UPDATE tasks SET name=name WHERE id=$1',[id]);await native.query('COMMIT');
  assert.ok((await admin.query('SELECT updated_at FROM tasks WHERE id=$1',[id])).rows[0].updated_at>before);
- const recurring=await task({series:randomUUID()});assert.ok((await call(c,'append_task_note',{uuid:recurring,request_id:randomUUID(),content:'bad'})).error);
+ const recurring=await task({series:randomUUID()});assert.equal((await call(c,'append_task_note',{uuid:recurring,request_id:randomUUID(),content:'added'})).success,true);
  const fresh=(await call(c,'read_task',{uuid:id}))[0];r=await call(c,'complete_task',{uuid:id,request_id:randomUUID(),expected_updated_at:fresh.updated_at});assert.equal(r.success,true,JSON.stringify(r));
 });
 test('bounds, unexpected args, foreign tags, unavailable tools and malformed IDs fail closed without contents in errors',async()=>{
@@ -120,4 +121,84 @@ test('rate limit is durable across sessions and audit contains no note bodies',a
  const c=await session();for(let i=0;i<120;i++)assert.equal((await call(c,'__authorize')).authorized,true);
  assert.match((await call(await session(),'list_tags')).error,/Rate limit/);
  const cols=(await admin.query("SELECT column_name FROM information_schema.columns WHERE table_schema='streamline_mcp_private' AND table_name='audit'")).rows.map(x=>x.column_name);assert.deepEqual(cols,['id','happened_at','tool','succeeded']);
+});
+
+test('recurrence conversion creates one native-compatible first occurrence and retry cannot duplicate it',async()=>{
+ const c=await session(),id=await task();const old=(await call(c,'read_task',{uuid:id}))[0];
+ const args={uuid:id,request_id:randomUUID(),expected_updated_at:old.updated_at,first_due_date:'2026-11-23',rule:{frequency:'weekly',weekdays:[2,4,6]}};
+ const results=await Promise.all([call(c,'set_task_recurrence',args),call(await session(),'set_task_recurrence',args)]);
+ assert.equal(results[0].success,true,JSON.stringify(results));assert.deepEqual(results[0],results[1]);
+ const r=results[0],rows=(await admin.query('SELECT * FROM tasks WHERE series_id=$1',[r.series_id])).rows;
+ assert.equal(rows.length,2);const parent=rows.find(t=>t.is_recurring_template),child=rows.find(t=>!t.is_recurring_template);
+ assert.equal(parent.id,id);assert.equal(child.recurrence_parent_id,id);assert.equal(child.note,'original');assert.equal(child.due_date.toISOString(),'2026-11-23T12:00:00.000Z');
+ const {createHash}=await import('node:crypto');const bytes=createHash('sha256').update(['8ca7cb2c-e539-47fa-93fa-1f11eed07e96',r.series_id,String(child.due_date.getTime()/1000)].join('\x1f')).digest().subarray(0,16);bytes[6]=(bytes[6]&15)|80;bytes[8]=(bytes[8]&63)|128;
+ assert.equal(child.id.replaceAll('-',''),bytes.toString('hex'));
+ assert.deepEqual(JSON.parse(parent.recurrence_rule_data),{frequency:'weekly',weekdays:[2,4,6],interval:1,anchor:'scheduledDueDate',endCondition:{type:'never'},occurrencesGenerated:0});
+ assert.deepEqual((await call(c,'search_tasks',{series_id:r.series_id})).map(x=>x.uuid),[child.id]);
+ assert.equal((await call(c,'search_tasks',{series_id:r.series_id,include_templates:true})).length,2);
+ const read=(await call(c,'read_task',{uuid:child.id}))[0];assert.equal(read.recurrence_parent_id,id);
+ assert.equal((await call(c,'update_task',{uuid:child.id,request_id:randomUUID(),expected_updated_at:read.updated_at,name:'This occurrence only'})).success,true);
+ assert.equal((await admin.query('SELECT name FROM tasks WHERE id=$1',[id])).rows[0].name,'Synthetic task');
+ const fresh=(await call(c,'read_task',{uuid:child.id}))[0];assert.ok((await call(c,'complete_task',{uuid:child.id,request_id:randomUUID(),expected_updated_at:fresh.updated_at})).error);
+});
+
+test('editing and pausing a series preserves counters, open occurrences and completed history',async()=>{
+ const c=await session(),id=await task(),old=(await call(c,'read_task',{uuid:id}))[0];
+ const created=await call(c,'set_task_recurrence',{uuid:id,request_id:randomUUID(),expected_updated_at:old.updated_at,first_due_date:'2026-11-24',rule:{frequency:'daily'}});assert.equal(created.success,true,JSON.stringify(created));
+ await admin.query("UPDATE tasks SET recurrence_rule_data=jsonb_set(recurrence_rule_data::jsonb,'{occurrencesGenerated}','7')::text WHERE id=$1",[id]);
+ const history=await task({series:created.series_id});await admin.query('UPDATE tasks SET status=true,completed_date=now(),recurrence_parent_id=$1 WHERE id=$2',[id,history]);
+ const before=(await admin.query('SELECT row_to_json(t) AS value FROM tasks t WHERE series_id=$1 AND id<>$2 ORDER BY id',[created.series_id,id])).rows;
+ let read=(await call(c,'read_task',{uuid:id}))[0];
+ let r=await call(c,'set_task_recurrence',{uuid:id,request_id:randomUUID(),expected_updated_at:read.updated_at,rule:{frequency:'monthly',monthlyMode:'ordinalWeekday',ordinalWeek:-1,ordinalWeekday:6,anchor:'completionDate',endCondition:{type:'onDate',date:'2027-12-31T23:59:59Z'}}});assert.equal(r.success,true,JSON.stringify(r));
+ let native=JSON.parse((await admin.query('SELECT recurrence_rule_data FROM tasks WHERE id=$1',[id])).rows[0].recurrence_rule_data);
+ assert.equal(native.occurrencesGenerated,7);assert.equal(native.endCondition.date,Date.parse('2027-12-31T23:59:59Z')/1000-978307200);
+ assert.equal(r.recurrence_rule.endCondition.date,'2027-12-31T23:59:59.000Z');
+ assert.match((await call(c,'set_task_recurrence',{uuid:id,request_id:randomUUID(),expected_updated_at:read.updated_at,recurrence_status:'paused'})).error,/Conflict/);
+ for(const recurrence_status of ['paused','ended','active']){
+  read=(await call(c,'read_task',{uuid:id}))[0];r=await call(c,'set_task_recurrence',{uuid:id,request_id:randomUUID(),expected_updated_at:read.updated_at,recurrence_status});assert.equal(r.success,true,JSON.stringify(r));assert.equal(r.recurrence_status,recurrence_status);
+ }
+ const after=(await admin.query('SELECT row_to_json(t) AS value FROM tasks t WHERE series_id=$1 AND id<>$2 ORDER BY id',[created.series_id,id])).rows;assert.deepEqual(after,before);
+ read=(await call(c,'read_task',{uuid:id}))[0];assert.ok((await call(c,'update_task',{uuid:id,request_id:randomUUID(),expected_updated_at:read.updated_at,due_date:'2026-12-01T12:00:00Z'})).error);
+ assert.ok((await call(c,'set_task_recurrence',{uuid:created.first_occurrence_uuid,request_id:randomUUID(),expected_updated_at:read.updated_at,rule:{frequency:'daily'}})).error);
+});
+
+test('direct RPC recurrence validation rejects invalid rules without converting tasks',async()=>{
+ const c=await session(),id=await task(),old=(await call(c,'read_task',{uuid:id}))[0];
+ const invalid=[null,{frequency:'hourly'},{frequency:'daily',interval:0},{frequency:'daily',interval:1.2},{frequency:'daily',occurrencesGenerated:0},{frequency:'daily',anchor:'bad'},{frequency:'daily',monthOfYear:3},{frequency:'weekly',weekdays:[]},{frequency:'weekly',weekdays:[2,2]},{frequency:'weekly',weekdays:['2']},{frequency:'monthly'},{frequency:'monthly',monthlyMode:'dayOfMonth',dayOfMonth:32},{frequency:'monthly',monthlyMode:'ordinalWeekday',ordinalWeek:0,ordinalWeekday:2},{frequency:'yearly',monthOfYear:13,dayOfMonth:1},{frequency:'daily',endCondition:{type:'afterOccurrences',count:0}},{frequency:'daily',endCondition:{type:'never',count:2}},{frequency:'daily',endCondition:{type:'onDate',date:123}}];
+ for(const rule of invalid){const r=await call(c,'set_task_recurrence',{uuid:id,request_id:randomUUID(),expected_updated_at:old.updated_at,first_due_date:'2026-11-23',rule});assert.ok(r.error,JSON.stringify(rule));}
+ assert.equal((await admin.query('SELECT series_id FROM tasks WHERE id=$1',[id])).rows[0].series_id,null);
+ for(const first_due_date of ['2026-02-30','2026-11-23T12:00:00Z','infinity'])assert.ok((await call(c,'set_task_recurrence',{uuid:id,request_id:randomUUID(),expected_updated_at:old.updated_at,first_due_date,rule:{frequency:'daily'}})).error);
+});
+
+test('all native calendar patterns encode with counter protection',async()=>{
+ const c=await session();for(const rule of [{frequency:'daily',interval:3,anchor:'completionDate'},{frequency:'weekly',interval:2},{frequency:'monthly',monthlyMode:'dayOfMonth',dayOfMonth:31},{frequency:'monthly',monthlyMode:'ordinalWeekday',ordinalWeek:5,ordinalWeekday:2},{frequency:'yearly',monthOfYear:2,dayOfMonth:29,endCondition:{type:'afterOccurrences',count:10}}]){
+  const id=await task(),read=(await call(c,'read_task',{uuid:id}))[0];const r=await call(c,'set_task_recurrence',{uuid:id,request_id:randomUUID(),expected_updated_at:read.updated_at,first_due_date:'2026-11-23',rule});assert.equal(r.success,true,JSON.stringify(r));assert.equal(r.recurrence_rule.frequency,rule.frequency);
+ }
+});
+
+test('private source notes hide tasks and legacy occurrences across read, edit, append and recurrence tools',async()=>{
+ const c=await session(),source=await note(),parent=await task({series:randomUUID()});
+ await admin.query('UPDATE tasks SET source=$1,is_recurring_template=true WHERE id=$2',[source,parent]);
+ const series=(await admin.query('SELECT series_id FROM tasks WHERE id=$1',[parent])).rows[0].series_id,child=await task({series});
+ await admin.query('UPDATE tasks SET recurrence_parent_id=$1 WHERE id=$2',[parent,child]);
+ assert.equal((await call(c,'read_task',{uuid:child})).length,1);
+ await admin.query('UPDATE notes SET is_private=true WHERE id=$1',[source]);
+ for(const uuid of [parent,child]){
+  assert.deepEqual(await call(c,'read_task',{uuid}),[]);
+  for(const tool of ['append_task_note','update_task','set_task_recurrence']){
+   const args={uuid,request_id:randomUUID(),...(tool==='append_task_note'?{content:'bad'}:{expected_updated_at:new Date().toISOString(),...(tool==='set_task_recurrence'?{recurrence_status:'paused'}:{name:'bad'})})};assert.ok((await call(c,tool,args)).error);
+  }
+ }
+ assert.deepEqual(await call(c,'search_tasks',{series_id:series,include_templates:true}),[]);
+ assert.ok((await call(c,'update_note',{uuid:source,request_id:randomUUID(),expected_revision:1,content:'bad'})).error);
+});
+
+test('recurrence setup respects read-only mode and preserves reminder day',async()=>{
+ const c=await session(),id=await task();await admin.query("UPDATE tasks SET due_date='2026-11-23T12:00:00Z',reminder_date='2026-11-23T16:00:00Z',reminder_time_of_day='09:00' WHERE id=$1",[id]);
+ const read=(await call(c,'read_task',{uuid:id}))[0],args={uuid:id,request_id:randomUUID(),expected_updated_at:read.updated_at,first_due_date:'2026-11-23',rule:{frequency:'daily'}};
+ await admin.query('UPDATE streamline_mcp_private.settings SET writes_enabled=false');
+ try{assert.match((await call(c,'set_task_recurrence',args)).error,/disabled/);}finally{await admin.query('UPDATE streamline_mcp_private.settings SET writes_enabled=true');}
+ assert.ok((await call(c,'set_task_recurrence',{...args,first_due_date:'2026-11-24'})).error);
+ const r=await call(c,'set_task_recurrence',args);assert.equal(r.success,true,JSON.stringify(r));
+ const child=(await admin.query('SELECT reminder_date,reminder_time_of_day FROM tasks WHERE id=$1',[r.first_occurrence_uuid])).rows[0];assert.equal(child.reminder_time_of_day,'09:00');assert.equal(child.reminder_date.toISOString(),'2026-11-23T16:00:00.000Z');
 });
