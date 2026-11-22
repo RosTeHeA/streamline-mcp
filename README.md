@@ -2,6 +2,11 @@
 
 MCP server that gives AI assistants access to your Streamline tasks, notes, tags, and workspaces.
 
+For a hosted connector that works without a running Mac, including Claude Duet,
+see [hosted setup, permissions and operations](docs/hosted.md). It uses OAuth,
+private-note exclusion and a restricted database API. The instructions below
+describe the existing local stdio server.
+
 Use one local Git checkout per machine and point your MCP clients at it. GitHub `main` is the source of updates; no npm publishing, release archives, or per-agent clones are needed. The npm registry package named `streamline-mcp` belongs to a different project.
 
 ## Setup

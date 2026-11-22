@@ -24,3 +24,14 @@ This is the personal Streamline note/task MCP server at `RosTeHeA/streamline-mcp
 - Credentials remain outside Git in the user's existing MCP configuration. Never print or commit credentials or real note/task contents for diagnostics.
 - Tests must use synthetic configuration and must not access the live Supabase database.
 - See `README.md` and `docs/updating.md` for portable setup instructions. Keep them aligned with the actual scripts.
+
+## Hosted connector
+
+- Hosted code lives in `supabase/functions/streamline-mcp`; run its Deno tests as
+  documented in `docs/hosted.md` in addition to `npm test` for behavior changes.
+- Keep the hosted transport independent of local config and privileged keys.
+- Preserve owner/client checks, direct-access restrictions, private-note exclusion,
+  write gates, transactional retry deduplication and native sync metadata.
+- `docs/consent-config.json` intentionally contains only public OAuth configuration.
+- Deployment checkpoints and prior auth settings stay outside Git. Never run
+  production setup scripts as part of tests or include real note/task contents.

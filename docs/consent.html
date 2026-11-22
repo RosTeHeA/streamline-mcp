@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src https://jrgsnuobnulpadoivgyj.supabase.co; img-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer"><title>Connect Streamline</title><link rel="stylesheet" href="consent.css"><script type="module" src="consent.js"></script></head>
+<body><main><div class="mark" aria-hidden="true">S</div><p class="eyebrow">YOUR PERSONAL WORKSPACE</p><h1>Connect Streamline</h1>
+<p class="intro">Give Claude access to your tasks and notes through your secure Streamline connector.</p>
+<p id="status" role="status" aria-live="polite">Checking this connection request…</p>
+<form id="login" hidden><label for="email">Streamline account email</label><input id="email" name="email" type="email" autocomplete="username" required>
+<label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password">
+<button type="submit">Sign in</button><button id="magic" type="button" class="secondary">Email me a sign-in link</button>
+<p class="small">Use your existing Streamline account. This page does not create new accounts. Your password is sent directly to Streamline’s Supabase authentication service.</p></form>
+<section id="consent" hidden><h2>Claude · Streamline</h2><p>You are connecting your personal Streamline account to Claude.</p>
+<ul><li>Read tasks, nonprivate notes, tags and workspace names.</li><li>When write access is enabled: create and edit one-time tasks and notes, append text, and complete one-time tasks.</li><li>Private notes, attachments, permanent deletion and recurring-task changes stay unavailable.</li></ul>
+<p>Access starts read-only. Write operations require a separate server-side switch after connection testing. You can revoke this connection at any time.</p>
+<button id="approve" type="button">Allow this connection</button><button id="deny" type="button" class="secondary">Cancel</button></section>
+<p class="footer">Tokens stay in this page’s memory. No analytics, third-party scripts or browser token storage.</p></main></body></html>

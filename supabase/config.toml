@@ -1,0 +1,6 @@
+project_id = "streamline-mcp"
+
+[functions.streamline-mcp]
+# OAuth discovery is public; the handler verifies every MCP request itself.
+verify_jwt = false
+entrypoint = "./functions/streamline-mcp/index.ts"
