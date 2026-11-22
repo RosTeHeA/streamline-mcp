@@ -109,6 +109,13 @@ test('bounds, unexpected args, foreign tags, unavailable tools and malformed IDs
   const result=await call(c,tool,args);assert.ok(result.error,JSON.stringify(result));assert.ok(!JSON.stringify(result).includes('secret-text'));
  }
 });
+test('owned tag relationships are transactional and searchable; failed writes roll back completely',async()=>{
+ const c=await session(),tag=randomUUID(),id=randomUUID();await admin.query('INSERT INTO tags(id,user_id,name) VALUES($1,$2,$3)',[tag,owner,'Synthetic tag']);
+ const r=await call(c,'create_note',{uuid:id,request_id:randomUUID(),content:'Tagged note',tag_ids:[tag]});assert.equal(r.success,true,JSON.stringify(r));
+ assert.ok((await call(c,'search_notes',{tag_ids:[tag]})).some(n=>n.uuid===id));
+ const bad=randomUUID();const denied=await call(c,'create_note',{uuid:bad,request_id:randomUUID(),content:'Must roll back',tag_ids:[randomUUID()]});assert.ok(denied.error);assert.equal((await admin.query('SELECT id FROM notes WHERE id=$1',[bad])).rowCount,0);
+ const taskID=randomUUID();const taskResult=await call(c,'create_task',{uuid:taskID,request_id:randomUUID(),name:'Tagged task',tag_ids:[tag]});assert.equal(taskResult.success,true,JSON.stringify(taskResult));assert.ok((await call(c,'search_tasks',{tag_ids:[tag]})).some(t=>t.uuid===taskID));
+});
 test('rate limit is durable across sessions and audit contains no note bodies',async()=>{
  const c=await session();for(let i=0;i<120;i++)assert.equal((await call(c,'__authorize')).authorized,true);
  assert.match((await call(await session(),'list_tags')).error,/Rate limit/);

@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import sys
 import urllib.error
@@ -73,6 +74,10 @@ def apply_schema():
 def configure_auth():
     if not STATE.get('migration_sha256'):
         raise RuntimeError('Apply and verify database restrictions before enabling OAuth.')
+    health = request(PROJECT_URL + '/auth/v1/health', admin=True)
+    version = re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)', health.get('version', ''))
+    if not version or tuple(map(int, version.groups())) < (2, 198, 0):
+        raise RuntimeError('Supabase Auth v2.198.0+ is required to block OAuth credentials from account/MFA changes.')
     auth = request(MANAGEMENT + '/config/auth')
     changes = {'oauth_server_enabled': True, 'oauth_server_allow_dynamic_registration': False,
         'oauth_server_authorization_path': CONSENT_PATH, 'site_url': CONSENT_ORIGIN,
@@ -146,7 +151,7 @@ try:
         if not args.connection_verified: raise RuntimeError('Verify the owner-authorized Claude connection before enabling writes.')
         request(MANAGEMENT + '/secrets', 'POST', [{'name':'MCP_WRITES_ENABLED','value':'true'}])
         sql('UPDATE streamline_mcp_private.settings SET writes_enabled=true WHERE enabled', False)
-        print('Approved non-destructive write tools enabled. Reconnect Claude to refresh its tool list.')
+        print('Guarded write tools enabled. Reconnect Claude to refresh its tool list.')
 except Exception as error:
     print(str(error), file=sys.stderr)
     sys.exit(1)

@@ -49,6 +49,9 @@ Supabase; unsynced offline edits remain on the device until normal sync runs.
   public OAuth configuration only.
 - Public signup and OAuth dynamic registration are disabled for this personal
   deployment. Existing account sign-in and the native callback are retained.
+- Setup requires Supabase Auth v2.198.0 or later, which blocks OAuth client tokens
+  from changing account credentials or enrolling MFA. The deployed Auth version
+  was verified before completing this rollout.
 
 ## Data integrity
 

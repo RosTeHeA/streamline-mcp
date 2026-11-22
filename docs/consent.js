@@ -1,4 +1,5 @@
 // No auth tokens in localStorage/sessionStorage, URLs retained in history, or logs.
+if (window.top !== window.self) throw new Error('Open the Streamline consent page in its own tab.');
 const $ = id => document.getElementById(id);
 const status = message => { $('status').textContent = message; };
 let token, config, authorizationID;
