@@ -1,5 +1,10 @@
 # Installing and updating from Git
 
+The personal deployment has migrated to the [hosted connector](hosted.md).
+Keep its development checkout updated, but do not re-register local stdio clients
+or restore their privileged credentials. The instructions below describe legacy
+local installations; hosted code changes require the deployment steps in that guide.
+
 Use [RosTeHeA/streamline-mcp](https://github.com/RosTeHeA/streamline-mcp), with one local checkout per machine shared by that machine's MCP clients. Follow the [README setup](../README.md#setup) on a new machine. The npm registry package named `streamline-mcp` is unrelated.
 
 ## Update an existing installation

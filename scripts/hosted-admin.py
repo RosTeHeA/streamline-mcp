@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Explicit hosted setup actions; secrets are read privately, never printed.
 
-Requires SUPABASE_ACCESS_TOKEN and the existing local Streamline configuration.
+Requires SUPABASE_ACCESS_TOKEN and nonsecret hosted-admin.json project metadata.
+OAuth setup additionally requires SUPABASE_ADMIN_KEY for that invocation only.
 No test imports or executes this script. Production probes inspect metadata only.
 """
 import argparse
@@ -17,7 +18,9 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = Path.home() / '.config' / 'streamline-mcp'
 STATE_PATH = CONFIG_DIR / 'hosted-deployment.json'
-CONFIG = json.loads((CONFIG_DIR / 'config.json').read_text())
+CONFIG = json.loads((CONFIG_DIR / 'hosted-admin.json').read_text())
+if set(CONFIG) != {'projectURL', 'userID'}:
+    raise RuntimeError('hosted-admin.json must contain only projectURL and userID; never save an API key there.')
 PROJECT_URL = CONFIG['projectURL'].rstrip('/')
 REF = PROJECT_URL.split('//')[1].split('.')[0]
 MANAGEMENT = f'https://api.supabase.com/v1/projects/{REF}'
@@ -33,7 +36,10 @@ def save():
 def request(url, method='GET', body=None, admin=False):
     headers = {'Content-Type': 'application/json'}
     if admin:
-        headers.update(apikey=CONFIG['apiKey'], Authorization='Bearer ' + CONFIG['apiKey'])
+        key = os.environ.get('SUPABASE_ADMIN_KEY', '')
+        if not key.startswith('sb_secret_'):
+            raise RuntimeError('OAuth setup requires a temporary SUPABASE_ADMIN_KEY secret key in the environment. Revoke it after setup; do not save it in local MCP config.')
+        headers.update(apikey=key, Authorization='Bearer ' + key)
     else:
         headers['Authorization'] = 'Bearer ' + os.environ['SUPABASE_ACCESS_TOKEN']
     req = urllib.request.Request(url, method=method, headers=headers,
@@ -46,7 +52,7 @@ def request(url, method='GET', body=None, admin=False):
         # Error bodies may echo keys or private SQL. Never include them in logs.
         if urllib.parse.urlsplit(url).path.endswith('/database/query'):
             diagnostic = json.loads(error.read()).get('message', 'Database operation failed')
-            for value in [CONFIG['apiKey'], CONFIG['userID'], os.environ.get('SUPABASE_ACCESS_TOKEN', '')]:
+            for value in [os.environ.get('SUPABASE_ADMIN_KEY', ''), CONFIG['userID'], os.environ.get('SUPABASE_ACCESS_TOKEN', '')]:
                 if value: diagnostic = diagnostic.replace(value, '[redacted]')
             raise RuntimeError(diagnostic[:1200]) from None
         raise RuntimeError(f'{method} {urllib.parse.urlsplit(url).path}: HTTP {error.code}') from None

@@ -1,7 +1,7 @@
 # Hosted personal Streamline connector
 
 The hosted transport is a Supabase Edge Function, independent of a Mac or running
-Streamline app. Local stdio installations remain available. The hosted version has
+Streamline app. Local stdio is retired for this personal deployment. The hosted version has
 a deliberately smaller tool set and never loads the local privileged config.
 
 ## Connect Claude / Duet
@@ -116,9 +116,15 @@ only. The idempotency ledger is separate and contains private write payloads.
 ## Deploy and operate
 
 Run commands from this repository. `SUPABASE_ACCESS_TOKEN` is read from the
-environment; the existing private `~/.config/streamline-mcp/config.json` provides
-the project/owner and admin credential for setup only. Never copy secrets into
-source, command arguments, logs or chat. Setup checkpoints and prior auth settings
+environment; `~/.config/streamline-mcp/hosted-admin.json` contains only `projectURL`
+and `userID`. It must not contain an API key and is not read by the legacy server.
+Status, migrations, write controls and deployment need no saved data-access key.
+Only `configure-auth` additionally needs a temporary Supabase secret key supplied
+as `SUPABASE_ADMIN_KEY` in that invocation's environment. Create a dedicated setup
+key through Supabase, supply it without echoing it, and revoke it and unset the
+variable afterward, even if setup fails. Normal updates do not need to rerun
+`configure-auth`, which resets the hosted write gates to read-only.
+Never copy secrets into source, command arguments, logs or chat. Setup checkpoints and prior auth settings
 are stored in `~/.config/streamline-mcp/hosted-deployment.json` with mode 0600.
 
 ```sh
@@ -161,6 +167,34 @@ disable the connector first and restore the prior function deployment. Do not
 drop the write ledger or undo data edits. A schema rollback requires reviewing
 the privately saved original function definitions against any newer native
 migrations before restoring them. Do not overwrite native updates blindly.
+
+## Retiring local access
+
+Keep this repository active: it is also the hosted implementation and security
+maintenance source. Archiving GitHub does not stop existing clients or revoke keys.
+
+1. Remove the local `streamline` entry from Claude Desktop's
+   `claude_desktop_config.json`, then fully quit/reopen Claude. Keep the remote
+   **Streamline Hosted** connector connected.
+2. Set `enabled = false` under `[mcp_servers.streamline]` in Codex's `config.toml`
+   and restart Codex. Hosted access for a different client requires its own
+   reviewed OAuth registration; do not reuse Claude's callback configuration.
+3. Remove Claude Code's user and directory-local registrations with
+   `claude mcp remove streamline --scope user` and, from each affected directory,
+   `claude mcp remove streamline --scope local`. Restart existing sessions.
+4. Check other machines/clients and launch agents. Preserve local modifications
+   before moving duplicate checkouts aside; keep the hosted development checkout.
+5. Inventory dependencies, revoke the old dedicated MCP secret key in Supabase,
+   and remove `~/.config/streamline-mcp/config.json`. Preserve only nonsecret
+   project/owner metadata in `hosted-admin.json`; never restore the retired key.
+6. Verify old processes are gone, the revoked key fails authentication, and hosted
+   access remains enabled. Backups of old client settings are reference only;
+   restoring them can re-enable legacy registrations.
+
+The hosted privacy boundary covers connector requests. A coding agent granted
+shell access to Supabase management credentials or the native local database has
+separate administrative access; filesystem permissions for the same OS user do
+not isolate that access. Do not supply those credentials during routine task/note use.
 
 ## Maintaining the native schema
 

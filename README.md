@@ -5,7 +5,14 @@ MCP server that gives AI assistants access to your Streamline tasks, notes, tags
 For a hosted connector that works without a running Mac, including Claude Duet,
 see [hosted setup, permissions and operations](docs/hosted.md). It uses OAuth,
 private-note exclusion and a restricted database API. The instructions below
-describe the existing local stdio server.
+describe the legacy local stdio server, which is retired for this personal
+deployment. Use the hosted connector for normal access. Local stdio uses a
+privileged database credential and does not provide the hosted privacy boundary.
+Do not reinstall it as a fallback or restore a retired credential.
+
+This repository remains active because it contains the hosted server, migrations,
+consent page and security tests. GitHub stores source; Supabase runs the server
+and Netlify serves sign-in. See [retiring local access](docs/hosted.md#retiring-local-access).
 
 Use one local Git checkout per machine and point your MCP clients at it. GitHub `main` is the source of updates; no npm publishing, release archives, or per-agent clones are needed. The npm registry package named `streamline-mcp` belongs to a different project.
 

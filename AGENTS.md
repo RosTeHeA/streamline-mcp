@@ -4,6 +4,10 @@ This is the personal Streamline note/task MCP server at `RosTeHeA/streamline-mcp
 
 ## Installation and updates
 
+- The personal deployment now uses the hosted connector. Local stdio is retired;
+  do not restore local client registrations or privileged local credentials.
+  Keep the canonical checkout for hosted development/deployment and the legacy
+  transport source for reference/tests. See `docs/hosted.md`.
 - Maintain one Git checkout per machine on `main`; share its absolute `dist/index.js` path across local MCP clients.
 - On a new machine, clone this repository and run `npm ci`. The `prepare` script compiles TypeScript automatically.
 - To update an installed checkout, run `npm run update`, then reconnect/restart its MCP clients. Do not reset or discard local edits to make a pull succeed.
@@ -21,7 +25,10 @@ This is the personal Streamline note/task MCP server at `RosTeHeA/streamline-mcp
 
 ## Configuration
 
-- Credentials remain outside Git in the user's existing MCP configuration. Never print or commit credentials or real note/task contents for diagnostics.
+- Credentials remain outside Git. Hosted admin metadata lives in `hosted-admin.json`
+  with only `projectURL` and `userID`; admin credentials are supplied through the
+  environment for explicit operations. Never recreate legacy `config.json` or
+  print/commit credentials or real note/task contents for diagnostics.
 - Tests must use synthetic configuration and must not access the live Supabase database.
 - See `README.md` and `docs/updating.md` for portable setup instructions. Keep them aligned with the actual scripts.
 
